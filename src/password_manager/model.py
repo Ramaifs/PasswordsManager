@@ -6,7 +6,36 @@ import re
 
 from .errors import VaultError, InvalidVault
 
-FIELDS = ("title", "site", "username", "email", "phone", "password", "note")
+FIELDS = ("title", "site", "username", "email", "phone", "password", "second_password", "old_passwords", "note")
+OPTIONAL_FIELDS = {"second_password", "old_passwords"}
+SECRET_FIELDS = {"password", *OPTIONAL_FIELDS}
+SUGGESTION_FIELDS = ("email", "phone", "username", "site")
+
+
+def suggestions(doc, field):
+    if field not in SUGGESTION_FIELDS:
+        return []
+    values = {}
+    for entry in doc["entries"].values():
+        value = entry[field]
+        if not entry["deleted_at"] and value.strip():
+            values.setdefault(value.casefold(), value)
+    return sorted(values.values(), key=str.casefold)
+
+
+def valid_fields(record, extra):
+    """Accept legacy records without changing immutable causal register values."""
+    required = (set(FIELDS) - OPTIONAL_FIELDS) | set(extra)
+    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type"}
+            and record.get("entry_type", "account") in ("account", "password")
+            and all(isinstance(record.get(f, ""), str) and len(record.get(f, "")) <= 100_000 for f in FIELDS)
+            and (record.get("entry_type") != "password" or
+                 (record["category"] is None and not any(record.get(f, "") for f in FIELDS if f not in ("title", "password", "note"))
+                  and ("id" not in extra or bool(record["password"])))))
+
+
+def password_title(note):
+    return next((line.strip()[:80] for line in note.splitlines() if line.strip()), "Пароль")
 
 
 def now():
@@ -49,9 +78,9 @@ def validate(document):
         for eid, record in document["entries"].items():
             if str(uuid.UUID(eid)) != eid or not isinstance(record, dict):
                 raise InvalidVault()
-            if set(record) != set(FIELDS) | {"id", "category", "deleted_at", "updated_at"} or record["id"] != eid:
+            if not valid_fields(record, {"id", "category", "deleted_at", "updated_at"}) or record["id"] != eid:
                 raise InvalidVault()
-            if not all(isinstance(record[f], str) and len(record[f]) <= 100_000 for f in FIELDS) or not record["title"].strip():
+            if not record["title"].strip():
                 raise InvalidVault()
             if record["category"] is not None and record["category"] not in document["categories"]:
                 raise InvalidVault()
@@ -93,9 +122,7 @@ def validate(document):
             if key != "new":
                 if str(uuid.UUID(key)) != key:
                     raise InvalidVault()
-            if not isinstance(draft, dict) or set(draft) != set(FIELDS) | {"category"}:
-                raise InvalidVault()
-            if any(not isinstance(draft[f], str) or len(draft[f]) > 100_000 for f in FIELDS):
+            if not valid_fields(draft, {"category"}):
                 raise InvalidVault()
             if draft["category"] is not None and not isinstance(draft["category"], str):
                 raise InvalidVault()
@@ -108,9 +135,16 @@ def validate(document):
 
 
 def save_entry(doc, values, entry_id=None):
+    values = dict(values)
+    if values.get("entry_type") == "password":
+        if not isinstance(values.get("password"), str) or not values["password"]:
+            raise VaultError("Укажите пароль.")
+        if not isinstance(values.get("note", ""), str):
+            raise VaultError("Недопустимая заметка.")
+        values["title"] = password_title(values.get("note", ""))
     if not isinstance(values.get("title"), str) or not values["title"].strip():
         raise VaultError("Укажите название записи.")
-    if set(values) - (set(FIELDS) | {"category"}):
+    if set(values) - (set(FIELDS) | {"category", "entry_type"}):
         raise VaultError("Неизвестные поля записи.")
     if any(not isinstance(values.get(f, ""), str) or len(values.get(f, "")) > 100_000 for f in FIELDS):
         raise VaultError("Недопустимые поля записи.")
@@ -122,6 +156,10 @@ def save_entry(doc, values, entry_id=None):
     entry_id = entry_id or str(uuid.uuid4())
     record = {f: values.get(f, "") for f in FIELDS}
     record.update(id=entry_id, category=category, deleted_at=None, updated_at=now())
+    if "entry_type" in values:
+        record["entry_type"] = values["entry_type"]
+    if not valid_fields(record, {"id", "category", "deleted_at", "updated_at"}):
+        raise VaultError("Недопустимые поля записи.")
     doc["entries"][entry_id] = record
     doc["drafts"].pop(entry_id, None)
     return entry_id
@@ -252,11 +290,19 @@ def expire_trash(doc, at=None):
 
 
 def search(doc, query="", category_id="all", deleted=False):
-    query = query.casefold()
+    query = query.strip().casefold()
+    phone_query = re.sub(r"[^0-9]", "", query) if re.fullmatch(r"\+?[0-9\s().-]+", query) else ""
+    def matches(entry):
+        values = [entry.get(f, "") for f in FIELDS]
+        return (any(query in value.casefold() for value in values)
+                or bool(phone_query and any(phone_query in re.sub(r"[^0-9]", "", number)
+                    for value in values for number in re.findall(r"\+?[0-9][0-9\s().-]*", value))))
+
     selected = category_descendants(doc, category_id)
     return [deepcopy(e) for e in doc["entries"].values()
-            if bool(e["deleted_at"]) == deleted and (category_id == "all" or e["category"] in selected)
-            and any(query in e[f].casefold() for f in ("title", "site", "username", "email", "note"))]
+            if bool(e["deleted_at"]) == deleted and (category_id == "all" or e["category"] in selected
+                or (category_id == "other-passwords" and e.get("entry_type") == "password"))
+            and matches(e)]
 
 
 def backup_diff(current, previous):

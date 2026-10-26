@@ -2,9 +2,9 @@
 
 Адрес проекта: https://password-manager-vault.masaoyhs.workers.dev.
 
-На 2026-10-25 по HTTPS была доступна заглушка с HTTP 200. Публикация актуальной версии приложения на этом адресе не подтверждена. Подготовленный локально ZIP сам по себе не означает обновления сайта.
+2026-10-27 опубликована пересборка 0.40 с поиском по содержимому записей и телефону, разделом «Прочие пароли», автоподстановкой контактных данных, сортировкой и дополнительными полями паролей. Worker version ID: `fb034907-f439-417c-a077-526268dc6fa0`. Все 22 публичных файла проверены по SHA-256 на совпадение с текущим `web/password-manager/dist`. Серверный маршрут `/api/google/config` ответил HTTP 200, `enabled: true`, Client ID совпадает с конфигурацией сайта. Живой вход в Google этой проверкой не выполнялся.
 
-Пакет для загрузки: `artifacts/cloudflare-workers-upload.zip`. Файл `artifacts/cloudflare-pages-upload.zip` содержит ту же сборку под совместимым именем. Порядок подготовки и проверки — в [инструкции размещения](../deployment/cloudflare-pages/README.md).
+Публикация выполнена через существующую конфигурацию `deployment/cloudflare-worker/wrangler.jsonc`, с сохранением KV binding и секретов. Локальный архив актуальных файлов: `releases/0.40/PasswordManager-web-0.40.zip`. Результаты: `artifacts/cloudflare-public-check.json`, `artifacts/cloudflare-google-config-check.json` и [протокол пересборки](category-navigation-verification.md).
 
 ## Ограничение доступа
 

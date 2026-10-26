@@ -6,13 +6,13 @@ from pathlib import Path
 import sys
 import time
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QAbstractNativeEventFilter, QTranslator, QLibraryInfo, QSize
+from PySide6.QtCore import QEvent, Qt, QTimer, QAbstractNativeEventFilter, QTranslator, QLibraryInfo, QSize, QCollator, QLocale
 from PySide6.QtGui import QGuiApplication, QColor, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QLineEdit, QTextEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
     QSplitter, QLabel, QMessageBox, QInputDialog, QFileDialog, QDialog, QSpinBox, QCheckBox,
     QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QToolButton, QMenu, QGridLayout,
-    QSizePolicy, QColorDialog, QFrame, QSystemTrayIcon)
+    QSizePolicy, QColorDialog, QFrame, QSystemTrayIcon, QCompleter)
 from .theme import stylesheet
 from .category_list import CategoryList, HAS_CHILDREN, COLLAPSED
 from .icons import application_icon, navigation_icon, entry_icon
@@ -28,7 +28,8 @@ from .session import Session
 from .storage import Store, read_bounded
 
 LABELS = {"title": "Название", "site": "Сайт", "username": "Логин", "email": "Почта",
-          "phone": "Телефон", "password": "Пароль", "note": "Заметка"}
+          "phone": "Телефон", "password": "Пароль", "second_password": "Второй пароль (2FA)",
+          "old_passwords": "Старые пароли", "note": "Заметка"}
 
 
 def button(text, callback, layout):
@@ -454,6 +455,13 @@ class Window(QMainWindow):
         self.query.setPlaceholderText("Поиск записей…")
         self.query.setClearButtonEnabled(True)
         cl.addWidget(self.query)
+        self.entry_sort = QComboBox()
+        self.entry_sort.setAccessibleName("Сортировка записей")
+        self.entry_sort.addItem("По алфавиту (А–Я)", "title")
+        self.entry_sort.addItem("По изменению (сначала новые)", "updated")
+        self.entry_sort.setCurrentIndex(self.entry_sort.findData(self.preferences.entry_sort))
+        self.entry_sort.currentIndexChanged.connect(lambda: self.safe(self.change_entry_sort))
+        cl.addWidget(self.entry_sort)
         self.entries = QListWidget()
         self.entries.setObjectName("entryList")
         cl.addWidget(self.entries)
@@ -481,7 +489,8 @@ class Window(QMainWindow):
         form.setColumnStretch(1, 1)
         editor.addLayout(form)
         positions = {"title": (0, 0, 2), "site": (1, 0, 2), "username": (2, 0, 1),
-                     "email": (2, 1, 1), "phone": (3, 0, 1), "password": (4, 0, 2), "note": (5, 0, 2)}
+                     "email": (2, 1, 1), "phone": (3, 0, 1), "password": (4, 0, 2),
+                     "second_password": (5, 0, 2), "old_passwords": (6, 0, 2), "note": (7, 0, 2)}
         self.field_form = form
         self.field_groups = {}
         def field(label, widget, row, column, span=1):
@@ -494,9 +503,11 @@ class Window(QMainWindow):
             form.addWidget(container, row, column, 1, span)
             self.field_groups[widget] = (container, row, column, span)
         self.fields = {}
+        self.secret_reveals = {}
+        self.secret_copy_buttons = {}
         for key, label in LABELS.items():
             widget = QTextEdit() if key == "note" else QLineEdit()
-            if key == "password":
+            if key in model.SECRET_FIELDS:
                 widget.setEchoMode(QLineEdit.EchoMode.Password)
             if isinstance(widget, QLineEdit):
                 widget.setMaxLength(100_000)
@@ -505,7 +516,22 @@ class Window(QMainWindow):
                 widget.setFixedHeight(90)
             widget.textChanged.connect(self.mark_dirty)
             self.fields[key] = widget
+            if key in model.SUGGESTION_FIELDS:
+                completer = QCompleter([], widget)
+                completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+                completer.setFilterMode(Qt.MatchFlag.MatchContains)
+                widget.setCompleter(completer)
+                completer.activated[str].connect(widget.setText)
             field(label, widget, *positions[key])
+            if key in model.OPTIONAL_FIELDS:
+                controls = QHBoxLayout()
+                reveal = QCheckBox("Показать")
+                reveal.setAccessibleName("Показать: " + label)
+                reveal.toggled.connect(lambda visible, target=widget: target.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password))
+                controls.addWidget(reveal)
+                self.secret_reveals[key] = reveal
+                self.secret_copy_buttons[key] = button("Копировать", lambda checked=False, field=key: self.copy_password(field), controls)
+                self.field_groups[widget][0].layout().addLayout(controls)
         self.record_category = QComboBox()
         self.record_category.currentIndexChanged.connect(self.mark_dirty)
         field("Категория", self.record_category, 3, 1)
@@ -516,7 +542,7 @@ class Window(QMainWindow):
         self.save_button = button("Сохранить", lambda: self.safe(self.save), actions)
         self.save_button.setObjectName("primary")
         self.edit_button = button("Редактировать", self.edit_entry, actions)
-        self.copy_button = button("Копировать пароль", self.copy_password, actions)
+        self.copy_button = button("Копировать пароль", lambda: self.copy_password(), actions)
         self.generate_button = button("Сгенерировать", lambda: self.safe(lambda: self.generator_dialog(True)), actions)
         editor.addLayout(actions)
         deleted_actions = QHBoxLayout()
@@ -576,6 +602,15 @@ class Window(QMainWindow):
         menu.addAction("Создать категорию").triggered.connect(lambda: self.safe(self.add_category))
         if cid in self.session.document["categories"]:
             menu.addAction("Создать подкатегорию").triggered.connect(lambda: self.safe(lambda: self.add_category(parent_id=cid)))
+            destinations = menu.addMenu("Переместить в…")
+            excluded = model.category_descendants(self.session.document, cid)
+            targets = [(None, "Верхний уровень")]
+            targets.extend((key, model.category_path(self.session.document, key))
+                           for key, _, _ in model.category_rows(self.session.document) if key not in excluded)
+            for parent, label in targets:
+                action = destinations.addAction(label)
+                action.setEnabled(self.session.document.get("category_parents", {}).get(cid) != parent)
+                action.triggered.connect(lambda checked=False, target=parent: self.safe(lambda: self.move_category(cid, target)))
             menu.addSeparator()
             for label, callback in [("Переименовать", self.rename_category), ("Поменять цвет", self.color_category), ("Удалить категорию", self.remove_category)]:
                 menu.addAction(label).triggered.connect(lambda checked=False, op=callback: self.safe(op))
@@ -587,6 +622,9 @@ class Window(QMainWindow):
         visible_row = 0
         for widget, (container, row, column, span) in sorted(self.field_groups.items(), key=lambda item: item[1][1:3]):
             self.field_form.removeWidget(container)
+            if self.password_only and widget not in (self.fields["password"], self.fields["note"]):
+                container.hide()
+                continue
             populated = bool(widget.currentData()) if widget is self.record_category else bool((widget.toPlainText() if isinstance(widget, QTextEdit) else widget.text()).strip())
             container.setVisible(editing or populated)
             if editing:
@@ -605,7 +643,7 @@ class Window(QMainWindow):
     def edit_entry(self):
         if self.selected_id and not self.session.document["entries"][self.selected_id]["deleted_at"]:
             self.set_editing(True)
-            self.fields["title"].setFocus()
+            self.fields["password" if self.password_only else "title"].setFocus()
 
     def action_menu(self, title, actions, layout):
         control = QToolButton()
@@ -622,7 +660,8 @@ class Window(QMainWindow):
     def mark_dirty(self, *args):
         if not self.loading:
             self.dirty = True
-            self.editor_heading.setText(self.fields["title"].text() or "Новая запись")
+            title = model.password_title(self.fields["note"].toPlainText()) if self.password_only else self.fields["title"].text() or "Новая запись"
+            self.editor_heading.setText(title)
 
     def refresh_categories(self, selected=None):
         self.loading = True
@@ -643,8 +682,8 @@ class Window(QMainWindow):
         for cid, name, depth in rows:
             if parents.get(cid) in self.collapsed_categories or parents.get(cid) in hidden:
                 hidden.add(cid)
-        for name, data in [("Все записи", "all"), ("Без категории", None), *[(('    ' * depth + '• ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
-            if self.categories.count() == 2:
+        for name, data in [("Все записи", "all"), ("Без категории", None), ("Прочие пароли", "other-passwords"), *[(('    ' * depth + '• ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
+            if self.categories.count() == 3:
                 heading = QListWidgetItem("Категории")
                 heading.setData(Qt.ItemDataRole.UserRole, "category-heading")
                 heading.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -652,8 +691,8 @@ class Window(QMainWindow):
                 self.categories.addItem(heading)
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, data)
-            if data in ("all", None, "trash"):
-                item.setIcon(navigation_icon({"all": "key", None: "folder", "trash": "trash"}[data], icon_color))
+            if data in ("all", None, "other-passwords", "trash"):
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "key", "trash": "trash"}[data], icon_color))
             if data in self.session.document["categories"]:
                 item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, "#9b87f5")))
                 item.setData(HAS_CHILDREN, data in has_children)
@@ -702,6 +741,10 @@ class Window(QMainWindow):
         self.refresh_entries()
         return True
 
+    def change_entry_sort(self):
+        self.preferences.save_entry_sort(self.entry_sort.currentData())
+        self.refresh_entries()
+
     def refresh_entries(self):
         if not self.session.unlocked:
             return
@@ -711,9 +754,17 @@ class Window(QMainWindow):
         category = item.data(Qt.ItemDataRole.UserRole) if item else "all"
         self.empty_trash_button.setVisible(category == "trash")
         self.empty_trash_button.setEnabled(any(e["deleted_at"] for e in self.session.document["entries"].values()))
-        for entry in model.search(self.session.document, self.query.text(), "all" if category == "trash" else category, category == "trash"):
+        entries = model.search(self.session.document, self.query.text(), "all" if category == "trash" else category, category == "trash")
+        collator = QCollator(QLocale("ru_RU"))
+        collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        entries.sort(key=lambda entry: (collator.sortKey(entry["title"]), entry["id"]))
+        if self.entry_sort.currentData() == "updated":
+            entries.sort(key=lambda entry: entry["updated_at"], reverse=True)
+        for entry in entries:
             cid = entry["category"]
             category_name = self.session.document["categories"].get(cid, "Без категории")
+            if entry.get("entry_type") == "password":
+                category_name = "Прочие пароли"
             item = QListWidgetItem(entry["title"])
             badge = entry_icon(entry["title"])
             item.setIcon(badge)
@@ -753,20 +804,30 @@ class Window(QMainWindow):
                 item.setIcon(QIcon())
                 item.setData(Qt.ItemDataRole.AccessibleTextRole, entry["title"])
                 self.entries.setItemWidget(item, row)
+            if entry["id"] == self.selected_id:
+                self.entries.setCurrentItem(item)
         self.entries.blockSignals(False)
         self.entry_count.setText(f"Записей: {self.entries.count()}")
 
     def values(self):
-        return {**{key: widget.toPlainText() if isinstance(widget, QTextEdit) else widget.text() for key, widget in self.fields.items()},
+        values = {**{key: widget.toPlainText() if isinstance(widget, QTextEdit) else widget.text() for key, widget in self.fields.items()},
                 "category": self.record_category.currentData()}
+        if self.password_only:
+            values.update(entry_type="password", category=None, title=model.password_title(values["note"]))
+        return values
 
     def fill_editor(self, values):
         self.loading = True
+        self.password_only = values.get("entry_type") == "password"
         self.reveal.setChecked(False)
+        for reveal in self.secret_reveals.values():
+            reveal.setChecked(False)
         for key, widget in self.fields.items():
             widget.setPlainText(values.get(key, "")) if isinstance(widget, QTextEdit) else widget.setText(values.get(key, ""))
+            if key in model.SUGGESTION_FIELDS:
+                widget.completer().model().setStringList(model.suggestions(self.session.document, key))
         self.record_category.setCurrentIndex(max(0, self.record_category.findData(values.get("category"))))
-        self.editor_heading.setText(values.get("title") or "Новая запись")
+        self.editor_heading.setText(values.get("title") or ("Прочий пароль" if self.password_only else "Новая запись"))
         deleted = bool(values.get("deleted_at"))
         self.trash_button.setVisible(bool(self.selected_id) and not deleted)
         self.restore_button.setVisible(deleted)
@@ -777,7 +838,10 @@ class Window(QMainWindow):
 
     def clear_editor(self):
         self.selected_id = None
-        self.fill_editor({})
+        item = self.categories.currentItem()
+        cid = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self.fill_editor({"category": cid if cid in self.session.document["categories"] else None,
+                          "entry_type": "password" if cid == "other-passwords" else "account"})
 
     def leave_editor(self):
         if not self.dirty:
@@ -810,7 +874,7 @@ class Window(QMainWindow):
     def new_entry(self):
         if self.leave_editor():
             self.clear_editor()
-            self.fields["title"].setFocus()
+            self.fields["password" if self.password_only else "title"].setFocus()
 
     def save(self):
         if self.selected_id and self.session.document["entries"][self.selected_id]["deleted_at"]:
@@ -928,6 +992,9 @@ class Window(QMainWindow):
         self.categories.blockSignals(True)
         self.record_category.blockSignals(True)
         for widget in self.fields.values():
+            if isinstance(widget, QLineEdit) and widget.completer():
+                widget.completer().popup().hide()
+                widget.completer().model().setStringList([])
             widget.clear()
         # Nested modal event loops must not keep secrets visible after session lock.
         for dialog in self.findChildren(QDialog):
@@ -952,8 +1019,8 @@ class Window(QMainWindow):
         if failed:
             QMessageBox.warning(self, "Черновик не сохранён", "Не удалось записать черновик. Хранилище заблокировано; незавершённый ввод утрачен. Проверьте диск.")
 
-    def copy_password(self):
-        text = self.fields["password"].text()
+    def copy_password(self, field="password"):
+        text = self.fields[field].text()
         if text:
             self.clipboard_secret = text
             QApplication.clipboard().setText(text)
@@ -1112,7 +1179,7 @@ class Window(QMainWindow):
             if index < 0: return
             value = variants[dots[index]]
             if isinstance(value, dict) and "title" in value:
-                text = "\n\n".join(f"{label}: {('••••••' if field == 'password' and not reveal.isChecked() else value[field])}" for field, label in LABELS.items())
+                text = "\n\n".join(f"{label}: {('••••••' if field in model.SECRET_FIELDS and not reveal.isChecked() else value.get(field, ''))}" for field, label in LABELS.items())
             elif isinstance(value, dict):
                 text = "Окончательно удалено: " + value["purged_at"]
             else:
@@ -1324,8 +1391,8 @@ class Window(QMainWindow):
         for index in range(self.categories.count()):
             item = self.categories.item(index)
             kind = item.data(Qt.ItemDataRole.UserRole)
-            if kind in ("all", None, "trash"):
-                item.setIcon(navigation_icon({"all": "key", None: "folder", "trash": "trash"}[kind], muted))
+            if kind in ("all", None, "other-passwords", "trash"):
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "key", "trash": "trash"}[kind], muted))
             elif kind == "category-heading":
                 item.setForeground(QColor(muted))
 

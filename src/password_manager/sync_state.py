@@ -29,7 +29,7 @@ def empty():
 
 
 def validate(state):
-    from .model import FIELDS
+    from .model import valid_fields
     try:
         if not isinstance(state, dict) or set(state) != {"vector", "registers"}:
             raise InvalidVault()
@@ -66,9 +66,9 @@ def validate(state):
                     if datetime.fromisoformat(value["purged_at"]).tzinfo is None:
                         raise InvalidVault()
                 else:
-                    if not isinstance(value, dict) or set(value) != set(FIELDS) | {"id", "category", "deleted_at", "updated_at"} or value["id"] != eid:
+                    if not valid_fields(value, {"id", "category", "deleted_at", "updated_at"}) or value["id"] != eid:
                         raise InvalidVault()
-                    if any(not isinstance(value[f], str) or len(value[f]) > 100_000 for f in FIELDS) or not value["title"].strip():
+                    if not value["title"].strip():
                         raise InvalidVault()
                     if value["category"] is not None:
                         identifier(value["category"])

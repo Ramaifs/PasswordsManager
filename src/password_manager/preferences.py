@@ -16,6 +16,7 @@ class Preferences:
         self.close_action = "ask"
         self.window_mode = "normal"
         self.last_opened_vault = None
+        self.entry_sort = "title"
         try:
             with self.path.open("rb") as stream:
                 data = stream.read(1025)
@@ -26,6 +27,8 @@ class Preferences:
                     self.close_action = action
                 if isinstance(mode, str) and mode in WINDOW_MODES:
                     self.window_mode = mode
+                if value.get("entry_sort") in ("title", "updated"):
+                    self.entry_sort = value["entry_sort"]
                 last = value.get("last_opened_vault")
                 if isinstance(last, str) and str(uuid.UUID(last)) == last:
                     self.last_opened_vault = last
@@ -51,12 +54,20 @@ class Preferences:
         if self.last_opened_vault != value:
             self._save(self.close_action, self.window_mode, value)
 
-    def _save(self, action, mode, last=None):
+    def save_entry_sort(self, order):
+        if order not in ("title", "updated"):
+            raise VaultError("Неизвестный порядок сортировки записей.")
+        self._save(self.close_action, self.window_mode, order=order)
+
+    def _save(self, action, mode, last=None, order=None):
         last = last or self.last_opened_vault
+        order = order or self.entry_sort
         temporary = self.path.with_name("preferences-" + uuid.uuid4().hex + ".tmp")
         try:
             with temporary.open("x", encoding="utf-8") as stream:
                 value = {"close_action": action, "window_mode": mode}
+                if order != "title":
+                    value["entry_sort"] = order
                 if last:
                     value["last_opened_vault"] = last
                 json.dump(value, stream)
@@ -68,3 +79,4 @@ class Preferences:
         self.close_action = action
         self.window_mode = mode
         self.last_opened_vault = last
+        self.entry_sort = order

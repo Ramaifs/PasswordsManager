@@ -10,6 +10,165 @@ from password_manager.storage import Store
 PASSWORD = "GUI fictional password phrase"
 
 
+def test_other_passwords_editor_only_has_password_and_note_and_reopens(window):
+    from PySide6.QtCore import Qt
+    from password_manager import model
+    item = next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == 'other-passwords')
+    window.categories.setCurrentItem(item)
+    window.new_entry()
+    visible = [key for key, widget in window.fields.items() if not window.field_groups[widget][0].isHidden()]
+    assert visible == ['password', 'note']
+    assert window.field_groups[window.record_category][0].isHidden()
+    window.fields['password'].setText('Other password fixture')
+    window.fields['note'].setPlainText('Door lock')
+    assert window.editor_heading.text() == 'Door lock'
+    window.save()
+    eid = window.selected_id
+    record = window.session.store.open(PASSWORD)[1]['entries'][eid]
+    assert record['entry_type'] == 'password' and record['title'] == 'Door lock'
+    window.refresh_entries()
+    assert window.entries.count() == 1
+    window.entries.setCurrentRow(0)
+    window.edit_entry()
+    assert [key for key, widget in window.fields.items() if not window.field_groups[widget][0].isHidden()] == ['password', 'note']
+    window.fields['note'].setPlainText('Updated door lock')
+    window.lock_vault()
+    assert window.session.store.open(PASSWORD)[1]['drafts'][eid]['entry_type'] == 'password'
+
+
+def test_autocomplete_uses_vault_values_and_clears_when_locked(window):
+    from password_manager import model
+    values = {'email':'fixture@example.invalid', 'phone':'+79991234567', 'username':'fixture-user', 'site':'example.invalid'}
+    window.session.mutate(lambda doc: model.save_entry(doc, {'title':'Existing', **values}))
+    window.new_entry()
+    completers = []
+    for field, value in values.items():
+        completer = window.fields[field].completer()
+        completers.append(completer)
+        assert completer.model().stringList() == [value]
+        completer.setCompletionPrefix(value[:3])
+        assert completer.currentCompletion() == value
+        completer.activated.emit(value)
+        assert window.fields[field].text() == value
+    assert window.fields['password'].completer() is None
+    window.dirty = False
+    window.lock_vault()
+    for completer in completers:
+        assert completer.model().stringList() == []
+
+
+def test_search_box_filters_records_by_formatted_phone(window):
+    from password_manager import model
+    from PySide6.QtCore import Qt
+    first = window.session.mutate(lambda doc: model.save_entry(doc, {'title': 'Phone account', 'phone': '+7 (999) 123-45-67'}))
+    window.session.mutate(lambda doc: model.save_entry(doc, {'title': 'Other account', 'phone': '+1 (212) 555-0000'}))
+    window.refresh_entries()
+    window.query.setText('+7999')
+    assert window.entries.count() == 1
+    assert window.entries.item(0).data(Qt.ItemDataRole.UserRole) == first
+    window.query.setText('+7999000')
+    assert window.entries.count() == 0
+    window.query.clear()
+    assert window.entries.count() == 2
+
+
+def test_extra_password_fields_mask_copy_save_reopen_and_lock(window, app):
+    from PySide6.QtWidgets import QLineEdit
+    from password_manager.cloud_browser import CloudPreviewDialog
+    window.new_entry()
+    window.fields['title'].setText('Extra secrets')
+    for key in ['second_password', 'old_passwords']:
+        window.fields[key].setText(key + '-FICTIONAL-SECRET')
+        assert window.fields[key].echoMode() == QLineEdit.EchoMode.Password
+        window.secret_reveals[key].setChecked(True)
+        assert window.fields[key].echoMode() == QLineEdit.EchoMode.Normal
+        window.secret_copy_buttons[key].click()
+        assert QApplication.clipboard().text() == window.fields[key].text()
+        window.clear_clipboard()
+        assert QApplication.clipboard().text() == ''
+    window.save()
+    eid = window.selected_id
+    opened = window.session.store.open(PASSWORD)[1]
+    assert opened['entries'][eid]['second_password'] == 'second_password-FICTIONAL-SECRET'
+    assert opened['entries'][eid]['old_passwords'] == 'old_passwords-FICTIONAL-SECRET'
+    window.fill_editor(opened['entries'][eid])
+    for key in ['second_password', 'old_passwords']:
+        assert window.fields[key].echoMode() == QLineEdit.EchoMode.Password
+    preview = CloudPreviewDialog(window, {'name': 'Fixture'}, window.session.access, opened)
+    assert 'FICTIONAL-SECRET' not in preview.details.toPlainText()
+    preview.reveal.setChecked(True)
+    assert 'second_password-FICTIONAL-SECRET' in preview.details.toPlainText()
+    assert 'old_passwords-FICTIONAL-SECRET' in preview.details.toPlainText()
+    preview.clear()
+    preview.deleteLater()
+    window.lock_vault()
+    assert not window.session.unlocked
+    assert not window.fields
+
+
+def test_new_entry_uses_selected_category_and_subcategory(window):
+    from password_manager import model
+    from PySide6.QtCore import Qt
+    root = window.session.mutate(lambda doc: model.category(doc, 'Work'))
+    child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
+    window.refresh_categories()
+    for cid in [root, child, 'all', None, 'trash']:
+        item = next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == cid)
+        window.categories.setCurrentItem(item)
+        window.new_entry()
+        assert window.record_category.currentData() == (cid if cid in (root, child) else None)
+        assert not window.dirty
+    window.refresh_categories(child)
+    window.new_entry()
+    window.fields['title'].setText('Inherited category')
+    window.save()
+    assert window.session.store.open(PASSWORD)[1]['entries'][window.selected_id]['category'] == child
+
+
+def test_sort_preserves_unsaved_editor_and_selection(window):
+    from password_manager import model
+    from PySide6.QtCore import Qt
+    from password_manager.preferences import Preferences
+    def seed(doc):
+        a = model.save_entry(doc, {'title': 'Яндекс'})
+        b = model.save_entry(doc, {'title': 'Альфа'})
+        doc['entries'][a]['updated_at'] = '2026-10-27T12:00:00Z'
+        doc['entries'][b]['updated_at'] = '2026-10-26T12:00:00Z'
+        return a, b
+    a, b = window.session.mutate(seed)
+    window.refresh_entries()
+    ids = lambda: [window.entries.item(i).data(Qt.ItemDataRole.UserRole) for i in range(window.entries.count())]
+    assert ids() == [b, a]
+    window.entries.setCurrentRow(1)
+    window.set_editing(True)
+    window.fields['note'].setPlainText('Unsaved note')
+    window.entry_sort.setCurrentIndex(1)
+    assert ids() == [a, b]
+    assert window.entries.currentItem().data(Qt.ItemDataRole.UserRole) == a
+    assert window.selected_id == a and window.dirty
+    assert window.fields['note'].toPlainText() == 'Unsaved note'
+    assert Preferences(window.session.store.root).entry_sort == 'updated'
+    window.dirty = False
+
+
+def test_category_move_menu_excludes_descendants_and_keeps_subtree(window):
+    from password_manager import model
+    root = window.session.mutate(lambda doc: model.category(doc, 'Work'))
+    child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
+    other = window.session.mutate(lambda doc: model.category(doc, 'Personal'))
+    window.refresh_categories()
+    menu = window.category_menu(root)
+    targets = next(action.menu() for action in menu.actions() if action.text() == 'Переместить в…')
+    assert [a.text() for a in targets.actions()] == ['Верхний уровень', 'Personal']
+    targets.actions()[1].trigger()
+    assert window.session.document['category_parents'][root] == other
+    assert window.session.document['category_parents'][child] == root
+    menu = window.category_menu(root)
+    targets = next(action.menu() for action in menu.actions() if action.text() == 'Переместить в…')
+    targets.actions()[0].trigger()
+    assert root not in window.session.document['category_parents']
+
+
 def test_cloud_list_preview_export_and_last_opened_marker(window, monkeypatch, tmp_path):
     from password_manager.cloud_browser import CloudCopiesDialog, CloudPreviewDialog
     from password_manager.crypto import Access, unlock
@@ -135,7 +294,7 @@ def test_number_input_and_navigation_icons(window, monkeypatch):
     window.settings()
     for index in [0, 1, window.categories.count() - 1]:
         assert not window.categories.item(index).icon().isNull()
-    heading = window.categories.item(2)
+    heading = window.categories.item(3)
     assert heading.text() == 'Категории'
     assert not (heading.flags() & Qt.ItemFlag.ItemIsSelectable)
     cid = window.session.mutate(lambda doc: model.category(doc, 'Work'))
@@ -157,8 +316,8 @@ def test_sidebar_context_actions_and_nested_categories(window):
     root = window.session.mutate(lambda doc: model.category(doc, 'Work'))
     child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
     window.refresh_categories()
-    assert window.categories.item(4).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
-    assert '• ' in window.categories.item(4).text()
+    assert window.categories.item(5).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
+    assert '• ' in window.categories.item(5).text()
     assert [action.text() for action in window.category_menu().actions()] == ['Создать категорию']
     labels = [action.text() for action in window.category_menu(root).actions()]
     assert all(label in labels for label in ['Создать подкатегорию','Переименовать','Поменять цвет','Удалить категорию'])

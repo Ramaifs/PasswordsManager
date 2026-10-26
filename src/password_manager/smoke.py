@@ -5,6 +5,7 @@ import tempfile
 import sys
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontDatabase
 
 from . import __version__, model
@@ -60,14 +61,29 @@ def run(output):
             window.fields["site"].setText("https://example.invalid")
             window.fields["username"].setText("fictional-user")
             window.fields["email"].setText("demo@example.invalid")
+            window.fields["phone"].setText("+7 (999) 123-45-67")
             window.fields["password"].setText(generate()[0])
+            window.fields["second_password"].setText("SECOND-FROZEN-FICTIONAL")
+            window.fields["old_passwords"].setText("OLD-FROZEN-FICTIONAL; older password")
             window.fields["note"].setPlainText("Вымышленные данные для проверки сборки.")
             window.save()
             eid = window.selected_id
             assert store.open(master)[1]["entries"][eid]["email"] == "demo@example.invalid"
             results["checks"].append("gui-save-reopen")
+            reopened = store.open(master)[1]["entries"][eid]
+            for field in ("second_password", "old_passwords"):
+                assert reopened[field] == window.fields[field].text()
+                assert window.fields[field].echoMode() == window.fields["password"].EchoMode.Password
+                assert reopened[field].encode() not in store.snapshots()[0].read_bytes()
+            results["checks"].append("second-and-old-passwords-encrypted-masked-save-reopen")
             assert store.open(recovery, recovery=True)[1]["entries"][eid]["username"] == "fictional-user"
             results["checks"].append("recovery")
+            window.query.setText("+7999")
+            assert window.entries.count() == 1
+            window.query.setText("+7999000")
+            assert window.entries.count() == 0
+            window.query.clear()
+            results["checks"].append("formatted-phone-search-through-gui")
             window.refresh_entries()
             window.entries.setCurrentRow(0)
             window.show()
@@ -91,6 +107,22 @@ def run(output):
             window.master.setText(master)
             window.open_or_create()
             results["checks"].append("lock-unlock")
+            window.new_entry()
+            for field in model.SUGGESTION_FIELDS:
+                assert window.fields[field].completer().model().stringList()
+            results["checks"].append("local-contact-autocomplete-from-vault")
+            item = next(window.categories.item(i) for i in range(window.categories.count())
+                        if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == "other-passwords")
+            window.categories.setCurrentItem(item)
+            window.new_entry()
+            assert [key for key, widget in window.fields.items() if not window.field_groups[widget][0].isHidden()] == ["password", "note"]
+            window.fields["password"].setText("OTHER-FROZEN-FIXTURE")
+            window.fields["note"].setPlainText("Door lock")
+            window.save()
+            assert store.open(master)[1]["entries"][window.selected_id]["entry_type"] == "password"
+            results["checks"].append("password-only-two-field-editor-save-reopen")
+            app.processEvents()
+            assert window.grab().save(str(output / "other-passwords.png"))
             window.dirty = False
             window.quit_application()
             app.processEvents()

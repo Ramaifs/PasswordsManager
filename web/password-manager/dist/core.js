@@ -3,7 +3,9 @@ import { argon2id } from './vendor/hash-wasm.js';
 
 export const MAX_FILE = 16 * 1024 * 1024;
 export const KDF = { name: 'argon2id', memory: 65536, time: 3, parallelism: 4 };
-export const FIELDS = ['title', 'site', 'username', 'email', 'phone', 'password', 'note'];
+export const FIELDS = ['title', 'site', 'username', 'email', 'phone', 'password', 'second_password', 'old_passwords', 'note'];
+export const passwordTitle = note => [...(note.split(/\r\n|[\r\n]/).find(line => line.trim())?.trim() || 'Пароль')].slice(0, 80).join('');
+const optionalFields = ['second_password', 'old_passwords'];
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -186,9 +188,16 @@ export function newDocument() {
   return { schema: 1, entries: {}, categories: {}, category_parents: {}, tombstones: {}, drafts: {}, settings: { theme: 'system', lock_minutes: 30 }, revision: 0, sync: null };
 }
 function timestamp(value) { return text(value) && /(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value)); }
+function validFields(value, extra) {
+  // Preserve old wire values exactly: adding empty fields would reuse causal dots.
+  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : [])]) &&
+    (!Object.hasOwn(value, 'entry_type') || ['account', 'password'].includes(value.entry_type)) &&
+    FIELDS.every(f => !Object.hasOwn(value, f) || (text(value[f]) && charLength(value[f]) <= 100000)) &&
+    (value.entry_type !== 'password' || (value.category === null && FIELDS.every(f => ['title', 'password', 'note'].includes(f) || !value[f]) && (!extra.includes('id') || !!value.password)));
+}
 function validateRecord(entry, id) {
-  if (!keys(entry, [...FIELDS, 'id', 'category', 'deleted_at', 'updated_at']) || entry.id !== id || !uuidPattern.test(id)) fail();
-  if (FIELDS.some(f => !text(entry[f]) || charLength(entry[f]) > 100000) || !entry.title.trim()) fail();
+  if (!validFields(entry, ['id', 'category', 'deleted_at', 'updated_at']) || entry.id !== id || !uuidPattern.test(id)) fail();
+  if (!entry.title.trim()) fail();
   if (entry.category !== null && !uuidPattern.test(entry.category)) fail();
   for (const field of ['deleted_at', 'updated_at']) if (entry[field] !== null && !timestamp(entry[field])) fail();
 }
@@ -203,7 +212,7 @@ export function validateDocument(doc) {
   for (const [id, time] of Object.entries(doc.tombstones)) if (!uuidPattern.test(id) || Object.hasOwn(doc.entries, id) || !timestamp(time)) fail();
   for (const [id, draft] of Object.entries(doc.drafts)) {
     if (id !== 'new' && !uuidPattern.test(id)) fail();
-    if (!keys(draft, [...FIELDS, 'category']) || FIELDS.some(f => !text(draft[f]) || charLength(draft[f]) > 100000) || (draft.category !== null && typeof draft.category !== 'string')) fail();
+    if (!validFields(draft, ['category']) || (draft.category !== null && typeof draft.category !== 'string')) fail();
   }
   const s = doc.settings;
   if (Object.keys(s).some(k => !['theme', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();

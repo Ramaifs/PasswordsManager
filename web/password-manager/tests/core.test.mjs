@@ -40,6 +40,48 @@ test('Python → browser → Python including changed master and original recove
   await fs.writeFile('artifacts/python-compatible.pmvault', bytes);
 });
 
+test('second and old passwords survive encryption, recovery and Python round trips', async () => {
+  const made = py("import json,base64; from password_manager.crypto import Access; from password_manager.model import new_document,save_entry; a,r=Access.create('12345678'); d=new_document(); save_entry(d,{'title':'Secrets','second_password':'SECOND-SECRET-MARKER','old_passwords':'OLD-SECRET-MARKER; older'}); print(json.dumps({'blob':base64.b64encode(a.encode(d)).decode(),'recovery':r}))", {});
+  const opened = await core.unlockVault(core.unb64(made.blob), '12345678');
+  const entry = Object.values(opened.document.entries)[0];
+  assert.equal(entry.second_password, 'SECOND-SECRET-MARKER');
+  assert.equal(entry.old_passwords, 'OLD-SECRET-MARKER; older');
+  entry.second_password = 'BROWSER-SECOND-SECRET'; entry.old_passwords = 'BROWSER-OLD-SECRET';
+  opened.document.drafts.new = { ...Object.fromEntries(core.FIELDS.map(f => [f, ''])), category: null, second_password: 'DRAFT-SECOND-SECRET', old_passwords: 'DRAFT-OLD-SECRET' };
+  const bytes = await core.encodeVault(opened.access, core.validateDocument(opened.document));
+  for (const marker of ['BROWSER-SECOND-SECRET', 'BROWSER-OLD-SECRET', 'DRAFT-SECOND-SECRET', 'DRAFT-OLD-SECRET']) assert.ok(!new TextDecoder().decode(bytes).includes(marker));
+  const recovered = await core.unlockVault(bytes, made.recovery, true);
+  assert.equal(Object.values(recovered.document.entries)[0].second_password, 'BROWSER-SECOND-SECRET');
+  const checked = py("import json,sys,base64; from password_manager.crypto import unlock; from password_manager.model import validate; p=json.load(sys.stdin); a,d=unlock(base64.b64decode(p['blob']),'12345678'); validate(d); e=next(iter(d['entries'].values())); print(json.dumps({'second':e['second_password'],'old':e['old_passwords'],'draft':d['drafts']['new']['old_passwords']}))", { blob: core.b64(bytes) });
+  assert.deepEqual(checked, { second: 'BROWSER-SECOND-SECRET', old: 'BROWSER-OLD-SECRET', draft: 'DRAFT-OLD-SECRET' });
+});
+
+test('optional secret validation rejects bad types and retains legacy wire bytes', async () => {
+  const doc = core.newDocument(), id = crypto.randomUUID();
+  doc.entries[id] = { title: 'Legacy', site: '', username: '', email: '', phone: '', password: '', note: '', id, category: null, updated_at: new Date().toISOString(), deleted_at: null };
+  const before = new TextDecoder().decode(core.canonical(doc));
+  core.validateDocument(doc);
+  assert.equal(new TextDecoder().decode(core.canonical(doc)), before);
+  for (const field of ['second_password', 'old_passwords']) for (const invalid of [null, 12, [], 'x'.repeat(100001)]) {
+    const bad = structuredClone(doc); bad.entries[id][field] = invalid;
+    assert.throws(() => core.validateDocument(bad));
+  }
+});
+
+test('password-only records round trip to Python and retain type in sync', async () => {
+  const made = py("import json,base64,uuid; from password_manager.crypto import Access; from password_manager import model,sync_state; a,r=Access.create('12345678'); d=model.new_document(); eid=model.save_entry(d,{'entry_type':'password','password':'ONLY-FIXTURE','note':'Door lock'}); d['sync']={'state':sync_state.seed(d,str(uuid.uuid4())),'pending':None,'published':None,'seen':{}}; print(json.dumps({'blob':base64.b64encode(a.encode(d)).decode(),'id':eid}))", {});
+  const opened = await core.unlockVault(core.unb64(made.blob), '12345678');
+  const entry = opened.document.entries[made.id];
+  assert.equal(entry.entry_type, 'password'); assert.equal(entry.title, 'Door lock');
+  const changed = structuredClone(opened.document); changed.entries[made.id].note = 'Updated lock';
+  core.trackChanges(opened.document, changed, crypto.randomUUID());
+  const bytes = await core.encodeVault(opened.access, core.validateDocument(changed));
+  const checked = py("import json,sys,base64; from password_manager.crypto import unlock; from password_manager import model; p=json.load(sys.stdin); a,d=unlock(base64.b64decode(p['blob']),'12345678'); model.validate(d); print(json.dumps({'count':len(model.search(d,category_id='other-passwords')),'note':next(iter(d['entries'].values()))['note']}))", {blob:core.b64(bytes)});
+  assert.deepEqual(checked, {count:1, note:'Updated lock'});
+  const bad = structuredClone(changed); bad.entries[made.id].email = 'not-allowed@example.invalid';
+  assert.throws(() => core.validateDocument(bad));
+});
+
 test('password Unicode codepoints, min/max and no trimming', async () => {
   assert.throws(() => core.validatePassword('1234567'));
   assert.throws(() => core.validatePassword('a'.repeat(129)));

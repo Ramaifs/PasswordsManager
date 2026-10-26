@@ -119,8 +119,8 @@ class CloudPreviewDialog(QDialog):
             self.details.clear()
             return
         entry = self.records[index]
-        labels = [("title", "Название"), ("site", "Сайт"), ("username", "Логин"), ("email", "Почта"), ("phone", "Телефон"), ("password", "Пароль"), ("note", "Заметка")]
-        lines = [label + ": " + ("••••••" if field == "password" and not self.reveal.isChecked() else entry[field]) for field, label in labels]
+        labels = [("title", "Название"), ("site", "Сайт"), ("username", "Логин"), ("email", "Почта"), ("phone", "Телефон"), ("password", "Пароль"), ("second_password", "Второй пароль (2FA)"), ("old_passwords", "Старые пароли"), ("note", "Заметка")]
+        lines = [label + ": " + ("••••••" if field in model.SECRET_FIELDS and not self.reveal.isChecked() else entry.get(field, "")) for field, label in labels]
         lines.append("Категория: " + (model.category_path(self.document, entry["category"]) if entry["category"] else "Без категории"))
         self.details.setPlainText("\n\n".join(lines))
 

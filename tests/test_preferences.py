@@ -4,6 +4,20 @@ from password_manager.preferences import Preferences
 from password_manager.errors import VaultError
 
 
+def test_entry_sort_survives_other_preference_changes(tmp_path):
+    prefs = Preferences(tmp_path)
+    assert prefs.entry_sort == 'title'
+    prefs.save_entry_sort('updated')
+    prefs.save_close_action('tray')
+    prefs.save_window_mode('maximized')
+    assert Preferences(tmp_path).entry_sort == 'updated'
+    for invalid in ['bad', None, []]:
+        with pytest.raises(VaultError):
+            prefs.save_entry_sort(invalid)
+    prefs.save_entry_sort('title')
+    assert Preferences(tmp_path).entry_sort == 'title'
+
+
 def test_close_preference_survives_restart_and_can_return_to_ask(tmp_path):
     first = Preferences(tmp_path)
     assert first.close_action == 'ask'

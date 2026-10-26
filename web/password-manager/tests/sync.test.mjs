@@ -18,13 +18,19 @@ function py(code, input) {
 test('web pending queue is immutable, Python consumes web versions and web consumes Python versions', async () => {
   const made = await core.createVault('тест1234'), actor = crypto.randomUUID(), e = entry();
   made.document.settings.sync_minutes = 0;
+  e.second_password = 'SECOND-NEVER-PLAINTEXT-ON-WIRE';
+  e.old_passwords = 'OLD-NEVER-PLAINTEXT-ON-WIRE';
   made.document.entries[e.id] = e;
   const prepared = await sync.prepare(made.access, made.document, actor, []), pending = prepared.sync.pending;
   assert.ok(!new TextDecoder().decode(core.unb64(pending.blob)).includes(e.password));
+  assert.ok(!new TextDecoder().decode(core.unb64(pending.blob)).includes(e.second_password));
+  assert.ok(!new TextDecoder().decode(core.unb64(pending.blob)).includes(e.old_passwords));
   const result = py("import json,sys,base64; from password_manager.crypto import unlock; from password_manager.sync import version_payload; from password_manager import sync_state; p=json.load(sys.stdin); a,d=unlock(base64.b64decode(p['doc']),'тест1234'); v=version_payload(base64.b64decode(p['blob']),a,p['id']); s=v['state']; key=next(iter(s['registers'])); value=next(iter(s['registers'][key].values())); value['note']='edited in Python'; sync_state.write(s,p['actor'],key,value); print(json.dumps({'blob':base64.b64encode(a.encode({'protocol':1,'id':p['next'],'state':s})).decode(),'state':s}))", { doc: core.b64(await core.encodeVault(made.access, prepared)), blob: pending.blob, id: pending.id, actor: crypto.randomUUID(), next: actor });
   const acknowledged = await sync.acknowledge(made.access, prepared, pending.id, core.unb64(pending.blob));
   const merged = await sync.prepare(made.access, acknowledged, actor, [{ id: actor, blob: core.unb64(result.blob) }]);
   assert.equal(merged.entries[e.id].note, 'edited in Python');
+  assert.equal(merged.entries[e.id].second_password, e.second_password);
+  assert.equal(merged.entries[e.id].old_passwords, e.old_passwords);
   assert.deepEqual(sync.merge(prepared.sync.state, result.state), result.state);
   const retry = await sync.prepare(made.access, prepared, actor, []);
   assert.deepEqual(retry.sync.pending, pending);
