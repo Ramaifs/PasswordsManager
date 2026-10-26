@@ -1,0 +1,6 @@
+{
+  "Демонстрационный сервис": [
+    {"Username": "fictional-user", "Email": "demo@example.invalid", "Phone": "+0 000 000 00 00", "Password": "FICTIONAL-EXAMPLE-ONLY"},
+    {"Username": "second-demo", "Email": "second@example.invalid", "Phone": "", "Password": "NOT-A-REAL-PASSWORD"}
+  ]
+}

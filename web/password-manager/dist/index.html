@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#1b1b20">
+  <meta name="description" content="Личное зашифрованное хранилище паролей. Создайте новое или откройте файл из Windows-приложения.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client; worker-src 'self'; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' data:; connect-src 'self' https://www.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Password Manager — Хранилища</title>
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="stylesheet" href="./style.css">
+  <script type="module" src="./app.js"></script>
+</head>
+<body>
+  <div id="app"><div class="boot">Открываем пространство…</div></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="modal"></dialog>
+  <input id="file-input" type="file" accept=".pmvault,application/json" hidden>
+  <noscript>Для локального шифрования и работы хранилища требуется JavaScript.</noscript>
+</body>
+</html>
