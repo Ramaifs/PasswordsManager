@@ -6,6 +6,7 @@ self.onmessage = async ({ data }) => {
   try {
     if (operation === 'prepare') {
       const prepared = await core.createVault(args.password), token = crypto.randomUUID();
+      if (args.name !== undefined) { prepared.document.settings.vault_name = args.name; core.validateDocument(prepared.document); }
       sessions.set(token, { access: prepared.access, document: prepared.document, actor: crypto.randomUUID() });
       self.postMessage({ id, result: { token, recovery: prepared.recovery, document: prepared.document } }); return;
     }

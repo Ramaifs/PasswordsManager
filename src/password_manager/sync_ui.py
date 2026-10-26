@@ -49,6 +49,16 @@ class SyncUI(QObject):
     @property
     def busy(self): return self.worker is not None
 
+    def connection_status(self):
+        if not self.connection.exists:
+            return "Google Drive — не подключен", "#d94a59"
+        from .sync import state_id
+        metadata = self.window.session.document.get("sync")
+        pending = (not metadata or metadata["pending"] is not None or metadata["published"] != state_id(self.window.session.access, metadata["state"]))
+        if pending or self.busy:
+            return "Google Drive — Требует синхронизации", "#c98313"
+        return "Google Drive — Подключен", "#2a9d59"
+
     def set_status(self, text):
         self.status = text
         if self.window.session.unlocked and hasattr(self.window, "status"):
@@ -128,6 +138,8 @@ class SyncUI(QObject):
             if QMessageBox.question(window, "Удаление из Drive", "Удалить служебные версии и отключить Google на этом компьютере? Ручные копии и локальное хранилище сохранятся.") == QMessageBox.StandardButton.Yes:
                 self.cancel = Event()
                 transport = self.transport_factory(self.connection, self.cancel)
+                transport.vault_id = self.window.session.access.header["vault_id"]
+                transport.vault_name = self.window.session.document["settings"].get("vault_name", "Main")
                 def deleted(_):
                     self.connection.disconnect()
                     self.set_status("Служебные версии удалены; Google отключён. Другие подключённые компьютеры могут загрузить свои версии снова.")
@@ -216,6 +228,8 @@ class SyncUI(QObject):
         self.window.toast("Синхронизация..", persistent=True)
         self.cancel = Event()
         transport = self.transport_factory(self.connection, self.cancel)
+        transport.vault_id = self.window.session.access.header["vault_id"]
+        transport.vault_name = self.window.session.document["settings"].get("vault_name", "Main")
         self.set_status("Получение зашифрованных версий…")
         self._start(transport.fetch, lambda remote: self._received(transport, remote))
 

@@ -206,9 +206,10 @@ export function validateDocument(doc) {
     if (!keys(draft, [...FIELDS, 'category']) || FIELDS.some(f => !text(draft[f]) || charLength(draft[f]) > 100000) || (draft.category !== null && typeof draft.category !== 'string')) fail();
   }
   const s = doc.settings;
-  if (Object.keys(s).some(k => !['theme', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
+  if (Object.keys(s).some(k => !['theme', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
   if (Object.hasOwn(s, 'sync_minutes') && (!Number.isInteger(s.sync_minutes) || s.sync_minutes < 0 || s.sync_minutes > 1440)) fail();
   if (s.category_colors !== undefined && (!object(s.category_colors) || Object.entries(s.category_colors).some(([id, color]) => !uuidPattern.test(id) || typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)))) fail();
+  if (Object.hasOwn(s, 'vault_name') && (typeof s.vault_name !== 'string' || !s.vault_name.trim() || charLength(s.vault_name) > 100 || /[\x00-\x1f]/.test(s.vault_name))) fail();
   if (Object.hasOwn(s, 'check_updates') && typeof s.check_updates !== 'boolean') fail();
   if (s.generator) generate(s.generator, true);
   if (doc.sync !== null) validateSync(doc.sync);

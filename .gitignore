@@ -12,6 +12,9 @@ __pycache__/
 **/node_modules/
 .env
 .env.*
+.dev.vars
+.dev.vars.*
+**/.wrangler/
 *.dpapi
 *.pmvault
 src/password_manager/google-desktop.json

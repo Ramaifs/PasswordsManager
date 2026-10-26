@@ -5,7 +5,8 @@ import uuid
 import urllib.parse
 
 from . import http_client
-from .crypto import canonical, parse
+from .crypto import canonical, parse, checked_envelope
+from .vault_names import backup_name
 from .oauth import bearer
 from .sync import SyncError, MAX_CLOUD, MAX_VERSIONS
 
@@ -30,6 +31,8 @@ class DriveTransport:
     def __init__(self, connection, cancel, *, request=http_client.request):
         self.connection, self.cancel, self.request = connection, cancel, request
         self.objects = {}
+        self.vault_id = None
+        self.vault_name = "Main"
 
     def _call(self, method, url, *, body=None, headers=None, json=True, limit=5 * 1024 * 1024):
         if self.cancel.is_set():
@@ -122,7 +125,7 @@ class DriveTransport:
                     if str(uuid.UUID(version)) != version: raise ValueError()
                 except ValueError:
                     raise SyncError("Некорректная версия в папке приложения.") from None
-                if metadata.get("name") != f"version-{version}.pmvault":
+                if self.vault_id and metadata["appProperties"].get("pm_vault") not in (None, self.vault_id):
                     continue
                 identity = file_id(metadata["id"])
                 try:
@@ -137,6 +140,8 @@ class DriveTransport:
                 blob = self._call("GET", API + f"/{identity}?alt=media", json=False, limit=MAX_CLOUD)
                 if len(blob) != size or (metadata.get("md5Checksum") and hashlib.md5(blob).hexdigest() != metadata["md5Checksum"]):
                     raise SyncError("Google не подтвердил целостность передачи файла.")
+                if self.vault_id and checked_envelope(blob)["header"]["vault_id"] != self.vault_id:
+                    continue
                 if version in remote and remote[version] != blob:
                     raise SyncError("Обнаружены разные файлы с одним идентификатором версии.")
                 remote[version] = blob
@@ -154,8 +159,8 @@ class DriveTransport:
             return existing[version]
         identity = self._generate_id()
         folder = self.connection.load()["folder"]
-        metadata = {"id": identity, "name": f"version-{version}.pmvault", "parents": [folder],
-                    "mimeType": "application/octet-stream", "appProperties": {"pm_app": APP, "pm_object": identity, "pm_version": version}}
+        metadata = {"id": identity, "name": backup_name(self.vault_name), "parents": [folder],
+                    "mimeType": "application/octet-stream", "appProperties": {"pm_app": APP, "pm_object": identity, "pm_version": version, **({"pm_vault": self.vault_id} if self.vault_id else {})}}
         boundary = "pm_" + uuid.uuid4().hex
         body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode() + canonical(metadata)
                 + f"\r\n--{boundary}\r\nContent-Type: application/octet-stream\r\n\r\n".encode() + blob + f"\r\n--{boundary}--\r\n".encode())

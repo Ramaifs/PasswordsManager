@@ -1,20 +1,22 @@
 # Менеджер паролей
 
-Менеджер паролей для Windows x64 на Python и PySide6. Хранит записи в зашифрованном локальном хранилище и поддерживает синхронизацию через Google Drive. Отдельная [веб-версия](web/password-manager/README.md) работает с файлами того же формата PMVAULT.
+Версия 0.36. Менеджер паролей для Windows x64 на Python и PySide6. Хранит записи в зашифрованном локальном хранилище и поддерживает синхронизацию через Google Drive. Отдельная [веб-версия](web/password-manager/README.md) работает с файлами того же формата PMVAULT.
 
 Возможности:
 
 - Записи с отдельными полями сайта, логина, почты, телефона, пароля и заметки.
-- Вложенные категории, поиск, светлая и тёмная темы.
+- Вложенные категории, цветные названия записей с подписью категории, поиск и темы.
 - Генератор паролей, корзина, импорт JSON и зашифрованный экспорт.
 - Мастер-пароль, ключ восстановления, автоматическая блокировка и восемь резервных состояний.
 - Синхронизация с сохранением конфликтующих версий и работа без интернета.
 
 ## Установка
 
-Версия 0.35: [установщик PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordsManager.exe) или [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordManager-0.35-portable.zip). В переносимой версии запустите `PasswordManager.exe` рядом с каталогом `_internal`. Python для готовой сборки не нужен.
+Опубликованная версия 0.35: [установщик PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordsManager.exe) или [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordManager-0.35-portable.zip). В переносимой версии запустите `PasswordManager.exe` рядом с каталогом `_internal`. Python для готовой сборки не нужен.
 
 Данные хранятся отдельно от программы: `%LOCALAPPDATA%\PersonalPasswordManager`. При создании хранилища сохраните ключ восстановления отдельно. Подробности — в [инструкции пользователя](USER_GUIDE.md).
+
+Локальная сборка 0.36: `releases/0.36/PasswordsManager.exe` и `releases/0.36/PasswordManager-0.36-portable.zip`. Для длительного входа Google на сайте нужна [настройка Worker](deployment/cloudflare-worker/README.md).
 
 ## Разработка
 
@@ -46,7 +48,7 @@ py -3.14 -m venv .venv
 - [Настройка Google OAuth](docs/google-setup.md).
 - [Веб-версия](docs/web.md) и [размещение на Cloudflare](deployment/cloudflare-pages/README.md).
 - [Архитектурные решения](docs/adr/0004-pyside6-arr.md).
-- [История изменений](CHANGELOG.md) и [проверки версии 0.35](docs/release-0.35.md).
+- [История изменений](CHANGELOG.md) и [изменения версии 0.36](docs/release-0.36.md).
 
 Исходный консольный проект: [Ramaifs/Passwords-Manager](https://github.com/Ramaifs/Passwords-Manager). Его JSON-формат поддерживается при импорте; пример с вымышленными данными — [legacy-demo.json](examples/legacy-demo.json).
 

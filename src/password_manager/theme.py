@@ -36,6 +36,7 @@ def stylesheet(dark=True):
         QPushButton#danger {{ color: {"#ed9da8" if dark else "#ad354b"}; }}
         QListWidget {{ background: transparent; border: none; outline: none; padding: 4px; }}
         QListWidget::item {{ padding: 13px 11px; border-radius: 7px; margin: 2px 0; }}
+        QListWidget#entryList::item {{ padding: 0; min-height: 42px; }}
         QListWidget::item:hover {{ background: {hover}; }}
         QListWidget::item:selected {{ background: {selected}; color: {text}; }}
         QSplitter::handle {{ background: {line}; width: 1px; }}
@@ -49,6 +50,9 @@ def stylesheet(dark=True):
         QMenu::item {{ padding: 9px 25px 9px 14px; border-radius: 5px; }}
         QMenu::item:selected {{ background: {selected}; }}
         QToolButton::menu-indicator {{ width: 0; }}
+        QPushButton#settingsAction {{ background: {field}; border: 1px solid {line}; border-radius: 7px; padding: 10px 12px; text-align: left; }}
+        QPushButton#settingsAction:hover {{ background: {hover}; border-color: {accent}; }}
+        QFrame#settingsSeparator {{ color: {line}; background: {line}; max-height: 1px; margin: 8px 0; }}
         QToolTip {{ background: {panel}; color: {text}; border: 1px solid {line}; padding: 6px; }}
         QTableWidget {{ background: {panel}; gridline-color: {line}; border: 1px solid {line}; }}
         QHeaderView::section {{ background: {side}; padding: 8px; border: none; }}

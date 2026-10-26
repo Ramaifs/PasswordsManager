@@ -3,8 +3,9 @@ import { FIELDS, defaultGenerator, generate, inspect, validatePassword, charLeng
 import { listVaults, getVault, putVault, forgetVault, saveSnapshot } from './storage.js';
 import { legacyVaults, removeLegacy } from './legacy.js';
 import { DriveTransport } from './drive.js';
-import { loadGoogle, authorize, accessToken, connected, clearGoogle, cancelGoogleLogin } from './google.js';
+import { loadGoogle, authorize, accessToken, connected, cancelGoogleLogin, initializeGoogleSession, ensureAccessToken, disconnectGoogle, persistentSessionEnabled } from './google.js';
 import { GOOGLE_WEB_CLIENT_ID } from './oauth-config.js';
+import { vaultName } from './vault-names.js';
 import { SyncSchedule, syncMinutes } from './sync-schedule.js';
 import { conflicts } from './sync.js';
 
@@ -35,11 +36,12 @@ let driveController, driveIdentity, cloudCopies = [], oldVaults = [], oauthPendi
 const syncSchedule = new SyncSchedule();
 let generatorOptions = { ...defaultGenerator };
 const driveCache = new Map();
-function stopDrive() { driveController?.abort(); clearGoogle(); driveIdentity = null; driveCache.clear(); }
+async function stopDrive() { driveController?.abort(); await disconnectGoogle(); driveIdentity = null; driveCache.clear(); }
 function pauseDrive() { driveController?.abort(); cancelGoogleLogin(); }
-function driveTransport() {
+async function driveTransport() {
+  await ensureAccessToken();
   driveController = new AbortController();
-  return new DriveTransport(accessToken(), { signal: driveController.signal, folder: state.record?.drive?.folder || null, cache: driveCache });
+  return new DriveTransport(accessToken(), { signal: driveController.signal, folder: state.record?.drive?.folder || null, cache: driveCache, vaultId: state.record?.blob ? inspect(state.record.blob).header.vault_id : null, vaultName: state.doc?.settings.vault_name || state.record?.name || 'Main' });
 }
 
 function startWorker() {
@@ -74,7 +76,7 @@ function savedStatus() { return state.record?.cloudPending ? 'Есть изме�
 const helpButton = `<button class="icon-button quiet" data-action="help" aria-label="Как это работает">${icon('help')}</button>`;
 function brand() { return '<div class="brand"><img src="./icon.svg" alt=""><div>Password Manager<small>ЛИЧНОЕ ПРОСТРАНСТВО</small></div></div>'; }
 function sidebar() {
-  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">WEB · 0.35</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
+  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<div class="vault-item"><button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button><button class="danger vault-delete" data-action="delete-vault" data-id="${esc(v.id)}" aria-label="Удалить хранилище ${esc(v.name)}">${icon('trash')}</button></div>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">WEB · 0.36</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
 }
 function shell(content, page = 'Хранилища') {
   app.innerHTML = `<div class="layout">${sidebar()}<main class="main"><header class="topbar"><div class="breadcrumb">${icon('vault')}<span>Ваше пространство</span><span>/</span><span>${esc(page)}</span></div><div class="top-status"><span class="status-dot"></span>Локальное шифрование</div></header>${content}<footer class="bottom-line"><span>Ваши пароли. Только ваш доступ.</span><span>Argon2id · AES-256-GCM</span></footer></main></div>`;
@@ -82,15 +84,14 @@ function shell(content, page = 'Хранилища') {
 function home() {
   state.view = 'home'; state.create = null;
   document.title = 'Password Manager — Хранилища';
-  shell(`<section class="welcome"><div class="welcome-mark">${icon('vault')}</div><h1>Пространство для ваших паролей</h1><p class="intro">Всё важное — в одном защищённом месте.<br>Создайте новое хранилище или откройте существующее.</p><div class="choices"><div class="choice"><div class="choice-leading">${icon('plus')}<div><h3>Создать новое хранилище</h3><p>Начните с чистого листа. Выберите имя и место<br class="desktop-break"> для вашего зашифрованного хранилища.</p></div></div><button class="primary" data-action="new">Создать</button></div><div class="choice"><div class="choice-leading">${icon('folder')}<div><h3>Открыть хранилище</h3><p>Уже есть файл? Откройте хранилище .pmvault,<br class="desktop-break"> в том числе из Windows-приложения.</p></div></div><button class="secondary" data-action="import">Открыть</button></div></div>${state.recent.length ? `<div class="mobile-recents"><p class="kicker">На этом устройстве</p>${state.recent.map(v => `<button class="vault-link" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span class="vault-name">${esc(v.name)}</span>${icon('lock')}</button>`).join('')}</div>` : ''}<div class="choice"><div><h3>Google Drive</h3><p>Открыть зашифрованную облачную копию</p></div><button class="secondary" data-action="drive-settings">Подключить</button></div>${oldVaults.length ? `<div class="notice"><strong>Прежние хранилища браузера</strong><p>Скачайте копии перед удалением. Новые данные сюда не записываются.</p>${oldVaults.map((v,n) => `<div class="backup-row"><span>${esc(v.name)}</span><button data-action="legacy-export" data-index="${n}">Скачать</button><button class="danger" data-action="legacy-delete" data-index="${n}">Удалить</button></div>`).join('')}</div>` : ''}<p class="welcome-foot">${icon('lock')}Мастер-пароль не передаётся на сервер</p></section>`);
+  shell(`<section class="welcome"><div class="welcome-mark">${icon('vault')}</div><h1>Пространство для ваших паролей</h1><p class="intro">Всё важное — в одном защищённом месте.<br>Создайте новое хранилище или откройте существующее.</p><div class="choices"><div class="choice"><div class="choice-leading">${icon('plus')}<div><h3>Создать новое хранилище</h3><p>Начните с чистого листа. Выберите имя и место<br class="desktop-break"> для вашего зашифрованного хранилища.</p></div></div><button class="primary" data-action="new">Создать</button></div><div class="choice"><div class="choice-leading">${icon('folder')}<div><h3>Открыть хранилище</h3><p>Уже есть файл? Откройте хранилище .pmvault,<br class="desktop-break"> в том числе из Windows-приложения.</p></div></div><button class="secondary" data-action="import">Открыть</button></div></div>${state.recent.length ? `<div class="mobile-recents"><p class="kicker">На этом устройстве</p>${state.recent.map(v => `<button class="vault-link" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span class="vault-name">${esc(v.name)}</span>${icon('lock')}</button><button class="danger secondary" data-action="delete-vault" data-id="${esc(v.id)}">Удалить хранилище</button>`).join('')}</div>` : ''}<div class="choice"><div><h3>Google Drive</h3><p>Открыть зашифрованную облачную копию</p></div><button class="secondary" data-action="drive-settings">Подключить</button></div>${oldVaults.length ? `<div class="notice"><strong>Прежние хранилища браузера</strong><p>Скачайте копии перед удалением. Новые данные сюда не записываются.</p>${oldVaults.map((v,n) => `<div class="backup-row"><span>${esc(v.name)}</span><button data-action="legacy-export" data-index="${n}">Скачать</button><button class="danger" data-action="legacy-delete" data-index="${n}">Удалить</button></div>`).join('')}</div>` : ''}<p class="welcome-foot">${icon('lock')}Мастер-пароль не передаётся на сервер</p></section>`);
 }
 function steps(current) { return `<div class="steps"><${current === 1 ? 'b' : 'span'}>01 Хранилище</${current === 1 ? 'b' : 'span'}><i class="step-line"></i><${current === 2 ? 'b' : 'span'}>02 Защита</${current === 2 ? 'b' : 'span'}><i class="step-line"></i><${current === 3 ? 'b' : 'span'}>03 Восстановление</${current === 3 ? 'b' : 'span'}></div>`; }
 function wizardHeader(step, title, intro) { return `<section class="wizard"><button class="back" data-action="wizard-back">${icon('back')}Назад</button>${steps(step)}<h1>${title}</h1><p class="intro">${intro}</p>`; }
 function newVault() {
-  if (!state.create) state.create = { name: '', location: 'folder', directory: null, step: 1 };
+  if (!state.create) state.create = { name: '', location: 'memory', directory: null, step: 1 };
   state.view = 'create'; state.create.step = 1;
-  const c = state.create;
-  shell(`${wizardHeader(1, 'Создать новое хранилище', 'Дайте хранилищу имя и выберите, где оно будет храниться.')}<form id="create-location" class="form"><div class="field"><label for="vault-name">Название хранилища</label><input id="vault-name" name="name" placeholder="Например, Личное" value="${esc(c.name)}" maxlength="100" autocomplete="off" required><small>Новые хранилища сохраняются в файл или Google Drive, без базы паролей в браузере.</small></div><div class="field"><span class="field-label">Расположение</span><div class="storage-choice"><label><input type="radio" name="location" value="drive" ${c.location === 'drive' ? 'checked' : ''}><span><strong>Google Drive</strong><small>Зашифрованные файлы в вашем Drive</small></span></label><label><input type="radio" name="location" value="folder" ${c.location === 'folder' ? 'checked' : ''}><span><strong>Локально на ПК</strong><small>Файл .pmvault на вашем компьютере</small></span></label></div></div><button type="button" class="secondary" data-action="drive-settings">Подключить Google Drive</button><div id="folder-options" class="field" ${c.location !== 'folder' ? 'hidden' : ''}><label for="vault-path">Папка хранилища</label><div class="path-row"><input id="vault-path" readonly placeholder="Выберите расположение" value="${esc(c.directory?.name || '')}"><button type="button" data-action="choose-folder">Обзор…</button></div><small>${typeof window.showDirectoryPicker === 'function' ? 'Запись напрямую в выбранный файл. В базе браузера копии не создаются.' : 'Этот браузер не поддерживает выбор папки. Файл можно скачать после создания.'}</small></div><p id="form-error" class="form-error"></p><div class="wizard-actions"><span class="hint">Шаг 1 из 3</span><button class="primary" type="submit">Продолжить${icon('arrow')}</button></div></form></section>`, 'Новое хранилище');
+  shell(`${wizardHeader(1, 'Создать новое хранилище', 'Сначала создайте хранилище. Сохранить файл или подключить Google Drive можно после создания.')}<form id="create-location" class="form"><div class="field"><label for="vault-name">Название хранилища</label><input id="vault-name" name="name" placeholder="Например, Main" value="${esc(state.create.name)}" maxlength="100" autocomplete="off" required><small>До сохранения в файл или Google Drive хранилище существует в памяти вкладки.</small></div><p id="form-error" class="form-error"></p><div class="wizard-actions"><button type="button" class="secondary" data-action="import">Открыть существующее</button><button class="primary" type="submit">Продолжить${icon('arrow')}</button></div></form></section>`, 'Новое хранилище');
   document.querySelector('#vault-name').focus();
 }
 function protection() {
@@ -130,7 +131,7 @@ async function persist(document, metadataOnly = false) {
     if (generation !== state.generation) return;
     state.record = await flushFile(saved); state.doc = staged.document;
     if (state.record.drive) state.record = await putVault({ ...state.record, cloudPending: true });
-    else if (state.record.filePending) { download(state.record.blob, filename(state.record.name) + '.pmvault'); }
+    else if (state.record.filePending && !state.record.memoryOnly) { download(state.record.blob, filename(state.record.name) + '-vault-export.pmvault'); }
   } catch (e) { if (worker) await rpc('discard', { token }).catch(() => {}); throw e; }
 }
 async function finishCreate() {
@@ -143,30 +144,37 @@ async function finishCreate() {
     catch (e) { if (e.name !== 'NotFoundError') throw e; }
     fileHandle = await c.directory.getFileHandle(name, { create: true });
   }
-  const record = { id: crypto.randomUUID(), name: c.name, blob: encoded.blob, backups: [], updatedAt: now(), fileHandle: fileHandle || null, filePending: true, drive: c.location === 'drive' ? { ...driveIdentity } : null };
+  const record = { id: crypto.randomUUID(), name: c.name, blob: encoded.blob, backups: [], updatedAt: now(), fileHandle: fileHandle || null, filePending: true, drive: null, memoryOnly: !fileHandle };
   const saved = await putVault(record);
   state.record = await flushFile(saved); state.doc = encoded.document; state.token = c.token; state.create = null; state.dirty = false;
   syncSchedule.reset(syncMinutes(state.doc.settings));
   await refreshRecent(); workspace();
-  if (c.location === 'folder' && !fileHandle) download(record.blob, filename(record.name) + '.pmvault');
-  if (c.location === 'drive') { state.record = await putVault({ ...state.record, cloudPending: true }); await syncDrive(); }
+  showModal('Хранилище создано', '<p>Выберите, куда сохранить зашифрованную копию. До сохранения не закрывайте вкладку.</p><div class="modal-actions"><button class="secondary" data-action="save-file">Сохранить файл</button><button class="primary" data-action="drive-settings">Сохранить в Google Drive</button></div>');
 }
 function visibleEntries() {
   return Object.values(state.doc.entries).filter(e => !!e.deleted_at === (state.category === 'trash') && (['all', 'trash'].includes(state.category) || (state.category === 'none' ? e.category === null : descendants(state.doc, state.category).has(e.category))) && ['title', 'site', 'username', 'email', 'note'].some(f => e[f].toLocaleLowerCase('ru').includes(state.query.toLocaleLowerCase('ru')))).sort((a, b) => a.title.localeCompare(b.title, 'ru'));
 }
 function workspaceSidebar() {
   const doc = state.doc, active = Object.values(doc.entries).filter(e => !e.deleted_at).length, trash = Object.values(doc.entries).filter(e => e.deleted_at).length;
-  return `<aside class="sidebar">${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button><div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${categoryRows(doc).map(({id, name, depth, path}) => `<div class="category-row" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || '#9b87f5')}"></i><span>${esc(name)}</span></button><button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.35</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
+  return `<aside class="sidebar">${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button><div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${categoryRows(doc).map(({id, name, depth, path}) => `<div class="category-row" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || '#9b87f5')}"></i><span>${esc(name)}</span></button><button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.36</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
 }
 function recordList() {
   const entries = visibleEntries();
-  return entries.length ? entries.map(e => `<button class="record ${e.id === state.selected ? 'active' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${esc(initials(e.title))}</span><span><strong>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small></span></button>`).join('') : `<div class="empty-state"><p>${state.query ? 'Ничего не найдено.<br>Попробуйте другой запрос.' : state.category === 'trash' ? 'В корзине пока пусто.' : 'Здесь пока нет записей.'}</p></div>`;
+  return entries.length ? entries.map(e => {
+    const category = state.doc.categories[e.category] || 'Без категории';
+    const color = e.category ? state.doc.settings.category_colors?.[e.category] || '#9b87f5' : '';
+    return `<button class="record ${e.id === state.selected ? 'active' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${esc(initials(e.title))}</span><span><strong ${color && state.category === 'all' ? `data-entry-color="${esc(color)}"` : ''}>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small>${state.category === 'all' ? `<small class="record-category">${esc(category)}</small>` : ''}</span></button>`;
+  }).join('') : `<div class="empty-state"><p>${state.query ? 'Ничего не найдено.<br>Попробуйте другой запрос.' : state.category === 'trash' ? 'В корзине пока пусто.' : 'Здесь пока нет записей.'}</p></div>`;
+}
+function applyEntryColors() {
+  document.querySelectorAll('[data-entry-color]').forEach(node => { node.style.color = node.dataset.entryColor; });
 }
 function workspace() {
   state.view = 'workspace'; document.title = state.record.name + ' — Password Manager';
   app.innerHTML = `<div class="workspace ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<section class="entry-column"><div class="entry-toolbar"><div class="entry-toolbar-top"><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
   document.querySelectorAll('[data-category-color]').forEach(node => { node.style.backgroundColor = node.dataset.categoryColor; });
   document.querySelectorAll('[data-category-depth]').forEach(node => { if (innerWidth > 760) node.style.paddingLeft = Math.min(Number(node.dataset.categoryDepth), 12) * 14 + 'px'; });
+  applyEntryColors();
   renderEditor();
 }
 function listActions() {
@@ -279,7 +287,8 @@ async function doUnlock() {
     else if ((existing.sequence || 0) !== (state.record.sequence || 0)) throw new Error('Хранилище обновлено в другой вкладке. Откройте его заново из списка.');
   }
   state.record = await flushFile(state.record);
-  state.token = result.token; state.doc = result.document; state.category = 'all'; state.query = ''; state.selected = null; state.editingNew = false; state.dirty = false; lastActivity = Date.now();
+  state.token = result.token; state.doc = result.document;
+  if (state.doc.settings.vault_name) state.record = await putVault({ ...state.record, name: state.doc.settings.vault_name }); state.category = 'all'; state.query = ''; state.selected = null; state.editingNew = false; state.dirty = false; lastActivity = Date.now();
   if (state.record.drive && state.doc.sync?.pending) state.record = await putVault({ ...state.record, cloudPending: true });
   if (state.record.wire) {
     const encoded = await rpc('encode', { token: state.token });
@@ -306,7 +315,8 @@ function syncSettingsFields() {
   return `<div class="field"><label class="sync-toggle" for="sync-auto"><span>Автоматическая синхронизация Google Drive</span><input id="sync-auto" type="checkbox" ${minutes ? 'checked' : ''}></label><label for="sync-minutes">Интервал в минутах</label><input id="sync-minutes" type="number" min="1" max="1440" step="1" value="${minutes || 5}" ${minutes ? '' : 'disabled'}><small>По умолчанию — 5 минут. Отключите автоматическую синхронизацию для режима «Только вручную». До отправки изменения Drive остаются в памяти вкладки.</small></div>`;
 }
 function settings() {
-  showModal('Настройки хранилища', `<p>${esc(state.record.name)} · Данные зашифрованы на этом устройстве</p><form id="settings-form" class="form">${syncSettingsFields()}<div class="inline-actions">${state.record.drive ? '<button type="button" class="secondary small" data-action="drive-sync">Синхронизировать сейчас</button>' : ''}</div><div class="field"><label for="lock-minutes">Блокировка при бездействии</label><select id="lock-minutes" name="lock_minutes">${[5, 15, 30, 60, 120].map(n => `<option value="${n}" ${state.doc.settings.lock_minutes === n ? 'selected' : ''}>Через ${n} минут</option>`).join('')}</select></div></form><div class="settings-action"><div><strong>Зашифрованная копия</strong><p>Скачайте .pmvault для Windows или другого браузера</p></div><button class="secondary small" data-action="export">Скачать</button></div><div class="settings-action"><div><strong>Резервные состояния</strong><p>Сохраняются 8 последних успешных состояний</p></div><button class="secondary small" data-action="backups">Открыть</button></div><div class="settings-action"><div><strong>Google Drive</strong><p>Обмен по расписанию или вручную. Сохранение записи не отправляет её сразу.</p></div><div><button class="secondary small" data-action="drive-settings">Подключение</button></div></div><p class="storage-summary">Список открытых хранилищ и резервные состояния существуют в памяти этой вкладки. Для сохранения используйте файл на ПК или Google Drive. Перед закрытием проверьте успешное сохранение.</p><div class="modal-actions"><button class="primary" type="submit" form="settings-form">Сохранить</button></div>`);
+  const status = !connected() || !state.record.drive ? ['не подключен', 'disconnected'] : state.record.cloudPending || state.doc.sync?.pending ? ['Требует синхронизации', 'pending'] : ['Подключен', 'connected'];
+  showModal('Настройки хранилища', `<form id="settings-form" class="form"><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Сохранить файл на ПК</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить хранилище</button><p class="storage-summary">До сохранения в файл или Google Drive данные существуют в памяти вкладки.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
 }
 async function commitSyncStage(staged) {
   try {
@@ -319,7 +329,7 @@ async function syncDrive() {
   if (!state.doc) throw new Error('Сначала откройте хранилище.');
   toast('Синхронизация..', true);
   syncSchedule.reset(syncMinutes(state.doc.settings));
-  const transport = driveTransport(), identity = driveIdentity || await transport.identity();
+  const transport = await driveTransport(), identity = driveIdentity || await transport.identity();
   if (state.record.drive?.id && state.record.drive.id !== identity.id) throw new Error('Выбран другой Google-аккаунт. Подключите прежний аккаунт.');
   // A complete remote listing precedes any publication; incompatible access stops it.
   const pendingLocal = !!state.record.cloudPending;
@@ -353,7 +363,7 @@ async function syncDrive() {
 function driveDialog() {
   showModal('Google Drive', `<p>Google получает только зашифрованные файлы. Мастер-пароль и ключ восстановления остаются здесь.</p>
     ${!connected() ? `<p>Войдите в Google и разрешите доступ к файлам приложения.</p><button id="google-connect" class="primary" data-action="drive-connect" disabled>Подготовка входа…</button>` : `<p>${esc(driveIdentity?.email || state.record?.drive?.email || 'Google подключён')}</p><div class="inline-actions">${state.doc ? '<button class="primary" data-action="drive-sync">Сохранить и синхронизировать</button><button class="secondary" data-action="drive-conflicts">Конфликты</button>' : '<button class="primary" data-action="drive-list">Открыть из Drive</button>'}<button class="quiet" data-action="drive-disconnect">Отключить Google</button></div>`}
-    <p id="form-error" class="form-error"></p><p class="notice">Подключение Google сохраняется в этой вкладке при блокировке хранилища. После перезагрузки или истечения доступа потребуется повторное подключение. При ошибке сети скачайте .pmvault перед закрытием.</p>`);
+    <p id="form-error" class="form-error"></p><p class="notice">${persistentSessionEnabled() ? 'Подключение Google запоминается на срок до 30 дней и восстанавливается после перезагрузки. Отключение Google завершает сохранённую сессию.' : 'Длительный вход на этом сайте пока недоступен. Подключение сохраняется при блокировке хранилища; после перезагрузки или истечения доступа Google может запросить повторный вход.'} При ошибке сети скачайте .pmvault перед закрытием.</p>`);
   const control = document.querySelector('#google-connect');
   if (control) void loadGoogle().then(() => {
     if (modal.contains(control)) { control.textContent = 'Войти в Google'; control.disabled = false; }
@@ -366,14 +376,14 @@ async function connectDrive() {
   try {
     await authorize(GOOGLE_WEB_CLIENT_ID);
     driveCache.clear();
-    driveIdentity = await driveTransport().identity();
-    if (state.create?.location === 'drive') { closeModal(); toast('Google подключён. Продолжите создание хранилища.'); }
+    driveIdentity = await (await driveTransport()).identity();
+    if (state.doc) { closeModal(); await syncDrive(); driveDialog(); }
     else driveDialog();
   } finally { oauthPending = false; }
 }
 async function listCloud() {
-  const transport = driveTransport(); cloudCopies = await transport.checkpoints();
-  showModal('Копии в Google Drive', `<p>Последние копии показаны первыми. Название содержит время сохранения и ID хранилища.</p>${cloudCopies.length ? cloudCopies.map((copy, n) => `<div class="backup-row"><small>${esc(copy.name)}</small><button class="secondary small" data-action="drive-open" data-index="${n}">Открыть</button></div>`).join('') : '<p>Сохранённых веб-копий пока нет. Хранилище Windows сначала откройте через экспорт .pmvault, затем подключите тот же Google Cloud проект.</p>'}<p id="form-error" class="form-error"></p>`);
+  const transport = await driveTransport(); cloudCopies = await transport.checkpoints();
+  showModal('Копии в Google Drive', `<p>Последние копии показаны первыми. Название содержит имя хранилища и время сохранения (UTC).</p>${cloudCopies.length ? cloudCopies.map((copy, n) => `<div class="backup-row"><small>${esc(copy.name)}</small><button class="secondary small" data-action="drive-open" data-index="${n}">Открыть</button><button class="danger secondary small" data-action="drive-delete" data-index="${n}">Удалить хранилище</button></div>`).join('') : '<p>Сохранённых веб-копий пока нет. Хранилище Windows сначала откройте через экспорт .pmvault, затем подключите тот же Google Cloud проект.</p>'}<p id="form-error" class="form-error"></p>`);
 }
 function showConflicts() {
   const all = state.doc.sync ? conflicts(state.doc.sync.state) : {};
@@ -384,25 +394,52 @@ function showConflicts() {
 }
 function help() { showModal('Ваше личное пространство', '<p>Создайте хранилище, задайте мастер-пароль и сохраните запасной ключ. Все поля шифруются на вашем устройстве; сайт не получает содержимое записей.</p><p class="notice">Для обмена с Windows используйте .pmvault. Google Drive подключается через настройки хранилища. На этом этапе используйте вымышленные данные.</p><p>Выберите файл на ПК или Google Drive. В базе браузера новые хранилища не сохраняются. Без прямого доступа к файлу используйте скачивание .pmvault.</p><div class="modal-actions"><button class="primary" data-action="close-modal">Понятно</button></div>'); }
 
+async function deleteVault(id) {
+  const record = await getVault(id); if (!record) return;
+  const cloud = record.drive && connected();
+  const choice = await ask('Удалить хранилище «' + record.name + '»?', 'Удаление уберёт хранилище и его историю из этой вкладки. Скачанные файлы на ПК сохранятся.' + (record.drive ? ' Облачные копии удаляются только отдельным действием.' : ''), [{ value: 'cancel', label: 'Отмена' }, { value: 'local', label: 'Удалить с сайта' }, ...(cloud ? [{ value: 'cloud', label: 'Удалить с сайта и из Drive' }] : [])]);
+  if (!['local', 'cloud'].includes(choice)) return;
+  if (choice === 'cloud') {
+    const transport = await driveTransport();
+    await transport.deleteVault(inspect(record.blob).header.vault_id);
+  }
+  if (state.record?.id === id) { pauseDrive(); stopWorker(); state.generation++; state.token = null; state.doc = null; state.record = null; state.dirty = false; state.selected = null; await clearClipboard(); }
+  await forgetVault(id); await refreshRecent(); closeModal(); home(); toast('Хранилище удалено');
+}
+async function deleteCloudVault(copy) {
+  if (!copy) return;
+  if (await ask('Удалить хранилище из Google Drive?', 'Будут удалены все служебные версии выбранного хранилища, включая резервные копии. Файлы на ПК и другие хранилища сохранятся. Подключённые устройства могут загрузить свою копию снова.', [{ value: 'cancel', label: 'Отмена' }, { value: 'delete', label: 'Удалить', primary: true }]) !== 'delete') return;
+  const transport = await driveTransport(), blob = await transport.readCheckpoint(copy.id), id = inspect(blob).header.vault_id;
+  await transport.deleteVault(id);
+  // Detach every open copy of this vault to prevent its background re-upload.
+  for (const record of await listVaults()) if (inspect(record.blob).header.vault_id === id) {
+    const saved = await putVault({ ...record, drive: null, cloudPending: false, filePending: true, memoryOnly: true });
+    if (state.record?.id === saved.id) state.record = saved;
+  }
+  await refreshRecent(); await listCloud(); toast('Облачное хранилище удалено');
+}
+
 const actions = {
-  'drive-settings': async () => driveDialog(),
+  'drive-settings': async () => { closeModal(); driveDialog(); },
+  'delete-vault': async node => deleteVault(node.dataset.id),
+  'drive-delete': async node => deleteCloudVault(cloudCopies[Number(node.dataset.index)]),
   'drive-connect': connectDrive,
   'drive-list': listCloud,
   'drive-sync': async () => { if (!await confirmLeave()) return; closeModal(); await syncDrive(); },
   'drive-conflicts': async () => showConflicts(),
   'drive-resolve': async node => { await commitSyncStage(await rpc('sync-resolve', { token: state.token, key: node.dataset.key, dot: node.dataset.dot })); state.record = await putVault({ ...state.record, cloudPending: true }); showConflicts(); toast('Вариант выбран · ожидает синхронизации'); },
   'drive-disconnect': async () => {
-    stopDrive();
+    await stopDrive();
     if (state.record?.drive) {
-      download(state.record.blob, filename(state.record.name) + '.pmvault');
+      download(state.record.blob, filename(state.record.name) + '-vault-export.pmvault');
       state.record = await putVault({ ...state.record, drive: null, fileHandle: null, filePending: true, cloudPending: false });
     }
     driveDialog();
   },
   'drive-open': async node => {
     const copy = cloudCopies[Number(node.dataset.index)]; if (!copy) return;
-    const transport = driveTransport(), blob = await transport.readCheckpoint(copy.id); inspect(blob);
-    closeModal(); await openRecord({ id: crypto.randomUUID(), name: 'Хранилище Google Drive', blob, wire: copy.version, backups: [], updatedAt: now(), drive: { ...driveIdentity, folder: transport.folder }, filePending: false });
+    const transport = await driveTransport(), blob = await transport.readCheckpoint(copy.id); inspect(blob);
+    closeModal(); await openRecord({ id: crypto.randomUUID(), name: copy.vaultName || 'Хранилище Google Drive', blob, wire: copy.version, backups: [], updatedAt: now(), drive: { ...driveIdentity, folder: transport.folder }, filePending: false });
   },
   'legacy-export': async node => { const old = oldVaults[Number(node.dataset.index)]; if (old) download(old.blob, filename(old.name) + '.pmvault'); },
   'legacy-delete': async node => {
@@ -415,6 +452,16 @@ const actions = {
   'wizard-back': async () => { if (state.create.step === 1) { state.create = null; home(); } else if (state.create.step === 2) newVault(); else { stopWorker(); state.create.token = null; state.create.recovery = null; protection(); } },
   'choose-folder': async () => { if (!(typeof window.showDirectoryPicker === 'function')) { toast('Выбор папки недоступен. После создания вы сможете скачать файл.'); return; } state.create.directory = await window.showDirectoryPicker({ mode: 'readwrite', id: 'password-manager-vaults' }); document.querySelector('#vault-path').value = state.create.directory.name; },
   'finish-create': finishCreate,
+  'save-file': async () => {
+    if (!state.record || !await confirmLeave()) return;
+    if (typeof window.showSaveFilePicker !== 'function') { download(state.record.blob, filename(state.record.name) + '-vault-export.pmvault'); closeModal(); return; }
+    const handle = await window.showSaveFilePicker({ suggestedName: filename(state.record.name) + '.pmvault', types: [{ description: 'Хранилище', accept: { 'application/octet-stream': ['.pmvault'] } }] });
+    // Selecting a nonempty destination requires its native overwrite confirmation.
+    const previous = new Uint8Array(await (await handle.getFile()).arrayBuffer());
+    const fileHash = previous.length ? await hash(previous) : null;
+    const saved = await putVault({ ...state.record, fileHandle: handle, fileHash, filePending: true, memoryOnly: false });
+    state.record = await flushFile(saved); closeModal(); await refreshRecent(); workspace();
+  },
   'copy-recovery': () => copy(state.create.recovery),
   'save-recovery': async () => { download(state.create.recovery + '\n', filename(state.create.name) + '-recovery-key.txt', 'text/plain;charset=utf-8'); toast('Сохраните ключ отдельно от хранилища'); },
   import: async () => {
@@ -450,7 +497,7 @@ const actions = {
   'select-entry': async node => { if (!await confirmLeave()) return; state.selected = node.dataset.id; state.editingEntry = false; state.editingNew = false; state.dirty = false; workspace(); },
   filter: async node => { if (!await confirmLeave()) return; state.category = node.dataset.id; state.selected = null; state.editingNew = false; workspace(); },
   'back-list': async () => { if (!await confirmLeave()) return; state.selected = null; state.editingNew = false; workspace(); },
-  export: async () => { if (state.dirty) toast('Экспорт содержит последнее сохранённое состояние.'); download(state.record.blob, filename(state.record.name) + '.pmvault'); },
+  export: async () => { if (state.dirty) toast('Экспорт содержит последнее сохранённое состояние.'); download(state.record.blob, filename(state.record.name) + '-vault-export.pmvault'); },
   'copy-password': () => copy(document.querySelector('#entry-password').value, true),
   'generate-entry': async () => generator(true), generator: async () => generator(false),
   'use-generated': async () => { const first = document.querySelector('#gen-output').value.split('\n')[0]; if (!first) return; closeModal(); document.querySelector('#entry-password').value = first; state.dirty = true; },
@@ -485,13 +532,13 @@ document.addEventListener('change', e => {
 });
 document.addEventListener('input', e => {
   if (e.target.closest('#entry-form')) { state.dirty = true; const label = document.querySelector('.save-state'); if (label) label.textContent = 'Есть несохранённые изменения'; }
-  if (e.target.id === 'search') { state.query = e.target.value; document.querySelector('#records').innerHTML = recordList(); document.querySelector('#list-foot').textContent = visibleEntries().length + ' записей · Зашифровано на устройстве'; }
+  if (e.target.id === 'search') { state.query = e.target.value; document.querySelector('#records').innerHTML = recordList(); applyEntryColors(); document.querySelector('#list-foot').textContent = visibleEntries().length + ' записей · Зашифровано на устройстве'; }
 });
 document.addEventListener('submit', e => {
   e.preventDefault(); const form = e.target;
   safe(async () => {
-    if (form.id === 'create-location') { const name = document.querySelector('#vault-name').value.trim(); if (!name || charLength(name) > 100) throw new Error('Название должно содержать от 1 до 100 символов.'); state.create.name = name; if (state.create.location === 'folder' && typeof window.showDirectoryPicker === 'function' && !state.create.directory) throw new Error('Выберите папку для хранилища.'); if (state.create.location === 'drive' && !connected()) throw new Error('Подключите Google Drive перед продолжением.'); protection(); }
-    else if (form.id === 'create-password') { const password = document.querySelector('#master-password').value; validatePassword(password); if (password !== document.querySelector('#master-repeat').value) throw new Error('Мастер-пароли не совпадают.'); const prepared = await rpc('prepare', { password }); state.create.token = prepared.token; state.create.recovery = prepared.recovery; recovery(); }
+    if (form.id === 'create-location') { state.create.name = vaultName(document.querySelector('#vault-name').value); protection(); }
+    else if (form.id === 'create-password') { const password = document.querySelector('#master-password').value; validatePassword(password); if (password !== document.querySelector('#master-repeat').value) throw new Error('Мастер-пароли не совпадают.'); const prepared = await rpc('prepare', { password, name: state.create.name }); state.create.token = prepared.token; state.create.recovery = prepared.recovery; recovery(); }
     else if (form.id === 'unlock-form') await doUnlock();
     else if (form.id === 'entry-form') await saveEntry();
     else if (form.id === 'category-form') {
@@ -509,11 +556,15 @@ document.addEventListener('submit', e => {
     else if (form.id === 'settings-form') {
       const next = clone(state.doc), previousInterval = syncMinutes(next.settings);
       next.settings.lock_minutes = Number(new FormData(form).get('lock_minutes'));
+      next.settings.vault_name = vaultName(new FormData(form).get('vault_name'));
+      next.settings.theme = new FormData(form).get('theme');
       next.settings.sync_minutes = document.querySelector('#sync-auto').checked ? Number(document.querySelector('#sync-minutes').value) : 0;
       if (!Number.isInteger(next.settings.sync_minutes) || next.settings.sync_minutes < (document.querySelector('#sync-auto').checked ? 1 : 0) || next.settings.sync_minutes > 1440) throw new Error('Интервал синхронизации: от 1 до 1440 минут, либо только вручную.');
       await persist(next, true);
       if (previousInterval !== next.settings.sync_minutes) syncSchedule.reset(next.settings.sync_minutes);
-      closeModal(); workspace(); toast('Настройки сохранены');
+      state.record = await putVault({ ...state.record, name: next.settings.vault_name });
+      document.documentElement.dataset.theme = next.settings.theme === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : next.settings.theme;
+      await refreshRecent(); closeModal(); workspace(); toast('Настройки сохранены');
     }
   });
 });
@@ -537,5 +588,5 @@ setInterval(checkAutoSync, 1000);
 // Returning to the tab checks elapsed inactivity; hiding it never locks immediately.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !oauthPending) checkIdle(); });
 document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'l' && (e.ctrlKey || e.metaKey) && e.shiftKey && state.token) { e.preventDefault(); safe(lock); } });
-try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); await refreshRecent(); home(); }
+try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); await initializeGoogleSession(GOOGLE_WEB_CLIENT_ID); await refreshRecent(); if (!state.recent.length && !oldVaults.length && !connected()) newVault(); else home(); }
 catch (e) { shell(`<section class="welcome"><h1>Не удалось открыть пространство</h1><p class="intro">${esc(e.message)}</p><button class="secondary" data-action="help">Как это работает</button></section>`); }

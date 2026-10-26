@@ -12,6 +12,7 @@
 
 .toast{left:auto;right:24px;transform:none;bottom:24px;z-index:1000;color:#ff9900}
 #settings-form .inline-actions{margin-bottom:20px}
+.settings-separator{border:0;border-top:1px solid var(--line);margin:22px 0}.settings-single{display:block;width:100%;text-align:left;margin:10px 0;padding:12px 14px;border:1px solid var(--line);border-radius:7px;background:var(--panel)}.drive-status{font-size:12px;margin:12px 0}.drive-status.connected{color:#2a9d59}.drive-status.pending{color:#c98313}.drive-status.disconnected{color:#d94a59}.record .record-category{font-size:9px;margin-top:5px}.vault-delete{padding:6px 10px;font-size:11px}
 #entry-form .field[hidden],#entry-form .field-grid[hidden]{display:none}
 .sync-toggle{display:flex!important;align-items:center;justify-content:space-between;gap:16px}
 .sync-toggle input[type=checkbox]{width:16px;height:16px;margin:0;flex:0 0 auto;accent-color:var(--accent)}
@@ -19,3 +20,5 @@
 .category-row>.small{flex-shrink:0}.field input[type=color]{width:70px;height:38px;padding:3px}
 .list-lock{display:none}input[readonly],textarea[readonly]{cursor:text}
 @media(max-width:760px){.list-lock{display:inline-flex}.category-row{flex-direction:column}.category-row>.small{padding:2px}.category-row>.small .icon{width:12px;height:12px}}
+
+.vault-item{display:flex;align-items:center;gap:4px}.vault-item .vault-link{flex:1;min-width:0}.vault-item .vault-delete{flex-shrink:0}

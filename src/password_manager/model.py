@@ -64,8 +64,14 @@ def validate(document):
             if str(uuid.UUID(eid)) != eid or datetime.fromisoformat(timestamp).tzinfo is None:
                 raise InvalidVault()
         settings = document["settings"]
-        if set(settings) - {"theme", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates"}:
+        if set(settings) - {"theme", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates", "vault_name"}:
             raise InvalidVault()
+        if "vault_name" in settings:
+            from .vault_names import validate_name
+            try:
+                validate_name(settings["vault_name"])
+            except VaultError:
+                raise InvalidVault() from None
         if "check_updates" in settings and type(settings["check_updates"]) is not bool:
             raise InvalidVault()
         colors = settings.get("category_colors", {})

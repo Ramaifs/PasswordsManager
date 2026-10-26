@@ -6,13 +6,13 @@ from pathlib import Path
 import sys
 import time
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QAbstractNativeEventFilter, QTranslator, QLibraryInfo
+from PySide6.QtCore import QEvent, Qt, QTimer, QAbstractNativeEventFilter, QTranslator, QLibraryInfo, QSize
 from PySide6.QtGui import QGuiApplication, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QLineEdit, QTextEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
     QSplitter, QLabel, QMessageBox, QInputDialog, QFileDialog, QDialog, QSpinBox, QCheckBox,
     QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QToolButton, QMenu, QGridLayout,
-    QSizePolicy, QColorDialog)
+    QSizePolicy, QColorDialog, QFrame)
 from .theme import stylesheet
 
 from . import model
@@ -164,6 +164,11 @@ class Window(QMainWindow):
         hint.setObjectName("caption")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content.addWidget(hint)
+        if not self.session.store.exists:
+            self.vault_name = QLineEdit("Main")
+            self.vault_name.setPlaceholderText("Название хранилища")
+            self.vault_name.setMaxLength(100)
+            content.addWidget(self.vault_name)
         self.master = QLineEdit()
         self.master.setEchoMode(QLineEdit.EchoMode.Password)
         self.master.setPlaceholderText(f"Мастер-пароль ({MIN_MASTER_PASSWORD}–{MAX_MASTER_PASSWORD} символов)")
@@ -177,7 +182,6 @@ class Window(QMainWindow):
         else:
             button("Открыть зашифрованный экспорт", lambda: self.safe(self.open_export), content)
             button("Восстановить доступ из файла", lambda: self.safe(lambda: self.open_export(recovery=True)), content)
-            button("Войти через Google Drive", lambda: self.safe(self.cloud.open_from_drive), content)
         layout.addStretch()
         foot = QLabel("Локальное хранилище  •  Google Drive приостановлен до разблокировки")
         foot.setObjectName("caption")
@@ -253,9 +257,12 @@ class Window(QMainWindow):
 
     def open_or_create(self):
         password = self.master.text()
+        created = not self.session.store.exists
         if self.session.store.exists:
             self.session.open(password)
         else:
+            from .vault_names import validate_name
+            name = validate_name(self.vault_name.text())
             validate_password(password)
             repeat = self.ask_password("Повторите мастер-пароль")
             if repeat is None:
@@ -266,11 +273,14 @@ class Window(QMainWindow):
             if not self.confirm_recovery(recovery):
                 return
             doc = model.new_document()
+            doc["settings"]["vault_name"] = name
             self.session.store.commit(access, doc)
             self.session.access, self.session.document = access, doc
         self.master.clear()
         self.last_activity = time.monotonic()
         self.build_editor()
+        if created:
+            self.toast("Хранилище создано. Для облачной копии подключите Google Drive в настройках.")
 
     def recover(self):
         recovery, ok = QInputDialog.getText(self, "Восстановление", "Ключ восстановления", QLineEdit.EchoMode.Password)
@@ -331,7 +341,9 @@ class Window(QMainWindow):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(16, 25, 16, 18)
         ll.setSpacing(10)
-        brand = QLabel("Хранилище")
+        brand = QLabel(self.session.document["settings"].get("vault_name", "Main"))
+        brand.setTextFormat(Qt.TextFormat.PlainText)
+        self.vault_title = brand
         brand.setObjectName("brand")
         ll.addWidget(brand)
         caption = QLabel("ЛИЧНОЕ ПРОСТРАНСТВО")
@@ -364,6 +376,7 @@ class Window(QMainWindow):
         self.query.setClearButtonEnabled(True)
         cl.addWidget(self.query)
         self.entries = QListWidget()
+        self.entries.setObjectName("entryList")
         cl.addWidget(self.entries)
         self.entry_count = QLabel()
         self.entry_count.setObjectName("caption")
@@ -561,9 +574,37 @@ class Window(QMainWindow):
         self.empty_trash_button.setVisible(category == "trash")
         self.empty_trash_button.setEnabled(any(e["deleted_at"] for e in self.session.document["entries"].values()))
         for entry in model.search(self.session.document, self.query.text(), "all" if category == "trash" else category, category == "trash"):
+            cid = entry["category"]
+            category_name = self.session.document["categories"].get(cid, "Без категории")
             item = QListWidgetItem(entry["title"])
+            color = self.session.document["settings"].get("category_colors", {}).get(cid, "#9b87f5") if cid else None
+            if category == "all" and color:
+                item.setForeground(QColor(color))
+            item.setToolTip(category_name)
             item.setData(Qt.ItemDataRole.UserRole, entry["id"])
             self.entries.addItem(item)
+            if category == "all":
+                row = QWidget()
+                row.setStyleSheet("background: transparent;")
+                labels = QVBoxLayout(row)
+                labels.setContentsMargins(10, 7, 10, 7)
+                labels.setSpacing(3)
+                title = QLabel(entry["title"])
+                title.setTextFormat(Qt.TextFormat.PlainText)
+                if color:
+                    title.setStyleSheet("color: " + color + "; background: transparent;")
+                subtitle = QLabel(category_name)
+                subtitle.setTextFormat(Qt.TextFormat.PlainText)
+                subtitle.setObjectName("caption")
+                subtitle.setStyleSheet("font-size: 11px; background: transparent;")
+                labels.addWidget(title)
+                labels.addWidget(subtitle)
+                row.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+                row.ensurePolished()
+                item.setSizeHint(row.sizeHint() + QSize(0, 6))
+                item.setText("")
+                item.setData(Qt.ItemDataRole.AccessibleTextRole, entry["title"])
+                self.entries.setItemWidget(item, row)
         self.entries.blockSignals(False)
         self.entry_count.setText(f"Записей: {self.entries.count()}")
 
@@ -851,10 +892,15 @@ class Window(QMainWindow):
         table.clear()
         dialog.deleteLater()
 
+    def export_filename(self):
+        import re
+        name = self.session.document["settings"].get("vault_name", "Main")
+        return re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name).rstrip('. ') + "-vault-export.pmvault"
+
     def export(self):
         if not self.leave_editor():
             return
-        destination, _ = QFileDialog.getSaveFileName(self, "Зашифрованный экспорт", "export.pmvault", "Хранилище (*.pmvault)")
+        destination, _ = QFileDialog.getSaveFileName(self, "Зашифрованный экспорт", self.export_filename(), "Хранилище (*.pmvault)")
         if destination:
             self.session.store.export(destination)
 
@@ -971,29 +1017,22 @@ class Window(QMainWindow):
         scroll.setWidgetResizable(True)
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setSpacing(12)
         scroll.setWidget(content)
         outer.addWidget(scroll)
-        form = QFormLayout()
         values = self.session.document["settings"]
-        sync = QSpinBox()
-        sync.setRange(1, 1440)
-        sync.setValue(values.get("sync_minutes", 5) or 5)
-        auto = QCheckBox()
-        auto.setChecked(bool(values.get("sync_minutes", 5)))
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Автоматическая синхронизация Google Drive"))
-        row.addStretch()
-        row.addWidget(auto)
-        layout.addLayout(row)
-        sync.setEnabled(auto.isChecked())
-        auto.toggled.connect(sync.setEnabled)
-        form.addRow("Интервал в минутах", sync)
-        layout.addLayout(form)
-        button("Синхронизировать сейчас", lambda: self.safe(self.cloud.sync), layout)
-        layout.addSpacing(20)
-        button("Войти через Google Drive" if not self.cloud.connection.exists else "Google Drive — подключение", lambda: self.safe(self.cloud.menu), layout)
+        def separator():
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.HLine)
+            line.setObjectName("settingsSeparator")
+            layout.addWidget(line)
+        def action(label, callback):
+            control = button(label, lambda: self.safe(callback), layout)
+            control.setObjectName("settingsAction")
+            return control
         general = QFormLayout()
         theme = QComboBox()
+        theme.setObjectName("settingsTheme")
         for label, key in [("Системная", "system"), ("Светлая", "light"), ("Тёмная", "dark")]:
             theme.addItem(label, key)
         theme.setCurrentIndex(theme.findData(values["theme"]))
@@ -1003,21 +1042,60 @@ class Window(QMainWindow):
         general.addRow("Тема", theme)
         general.addRow("Автоблокировка, минут", minutes)
         layout.addLayout(general)
-        button("Мастер-пароль и ключ восстановления…", lambda: self.safe(self.security_settings), layout)
-        layout.addWidget(QLabel("Хранилище"))
+        separator()
+        action("Мастер-пароль и ключ восстановления…", self.security_settings)
+        separator()
+        action("Google Drive — Действия", self.cloud.menu)
+        drive_status = QLabel()
+        drive_status.setObjectName("driveConnectionStatus")
+        layout.addWidget(drive_status)
+        sync_now = action("Синхронизировать сейчас", self.cloud.sync)
+        def update_status():
+            if not self.session.unlocked:
+                dialog.reject()
+                return
+            status, color = self.cloud.connection_status()
+            drive_status.setText(status)
+            drive_status.setStyleSheet("color: " + color + "; background: transparent; padding: 5px;")
+            sync_now.setEnabled(self.cloud.connection.exists and not self.cloud.busy)
+        update_status()
+        status_timer = QTimer(dialog)
+        status_timer.timeout.connect(update_status)
+        status_timer.start(500)
+        auto = QCheckBox("Автоматическая синхронизация Google Drive")
+        auto.setChecked(bool(values.get("sync_minutes", 5)))
+        layout.addWidget(auto)
+        sync = QSpinBox()
+        sync.setRange(1, 1440)
+        sync.setValue(values.get("sync_minutes", 5) or 5)
+        sync.setEnabled(auto.isChecked())
+        auto.toggled.connect(sync.setEnabled)
+        form = QFormLayout()
+        form.addRow("Интервал в минутах", sync)
+        layout.addLayout(form)
+        separator()
+        name = QLineEdit(values.get("vault_name", "Main"))
+        name.setMaxLength(100)
+        name_form = QFormLayout()
+        name_form.addRow("Имя хранилища", name)
+        layout.addLayout(name_form)
         for label, callback in [("Импорт JSON", self.import_json), ("Экспорт", self.export), ("Резервные копии", self.backups), ("Конфликты синхронизации", self.resolve_conflicts), ("Объединить файл", self.merge_encrypted)]:
-            button(label, lambda checked=False, op=callback: self.safe(op), layout)
+            action(label, callback)
+        separator()
         check_updates = QCheckBox("Проверять обновления при запуске")
         check_updates.setChecked(values.get("check_updates", True))
         layout.addWidget(check_updates)
-        button("Проверить обновления", lambda: self.updates.check(manual=True), layout)
+        action("Проверить обновления", lambda: self.updates.check(manual=True))
         layout.addStretch()
         def save_settings():
             if not self.session.unlocked:
                 return
-            self.session.mutate(lambda doc: doc["settings"].update(theme=theme.currentData(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
+            from .vault_names import validate_name
+            vault_name = validate_name(name.text())
+            self.session.mutate(lambda doc: doc["settings"].update(vault_name=vault_name, theme=theme.currentData(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
             self.cloud.reset_schedule()
             self.apply_theme()
+            self.vault_title.setText(vault_name)
             dialog.accept()
         button("Сохранить", lambda: self.safe(save_settings), layout).setObjectName("primary")
         dialog.exec()

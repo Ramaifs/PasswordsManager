@@ -1,5 +1,7 @@
 // Transport receives encrypted bytes only. No vault keys or record fields.
 import { parseStrict, canonical } from './core.js';
+import { inspect } from './core.js';
+import { backupName, nameFromBackup } from './vault-names.js';
 const API = 'https://www.googleapis.com/drive/v3/files';
 const APP = 'personal-password-manager-v1', FOLDER = 'application/vnd.google-apps.folder';
 const MAX = 4 * 1024 * 1024;
@@ -7,11 +9,11 @@ const id = value => { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/
 const owned = m => m.appProperties?.pm_app === APP && m.appProperties?.pm_object === m.id;
 const equal = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 export class DriveTransport {
-  constructor(token, { signal, fetcher = globalThis.fetch, folder = null, cache = new Map() } = {}) {
+  constructor(token, { signal, fetcher = globalThis.fetch, folder = null, cache = new Map(), vaultId = null, vaultName = 'Main' } = {}) {
     this.token = token; this.signal = signal;
     // Browser fetch is a Window/Worker method; transport must not become its receiver.
     this.fetcher = fetcher.bind(globalThis); this.folder = folder; this.cache = cache;
-    this.folderIds = null; this.remote = null;
+    this.folderIds = null; this.remote = null; this.vaultId = vaultId; this.vaultName = vaultName;
   }
   async call(method, url, { body, type, binary = false, limit = 2 * 1024 * 1024 } = {}) {
     const controller = new AbortController(), onAbort = () => controller.abort();
@@ -73,7 +75,7 @@ export class DriveTransport {
         const version = m.appProperties.pm_version;
         if (version === undefined) continue;
         if (typeof version !== 'string' || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(version)) throw new Error('Некорректный номер облачной версии.');
-        if (m.name !== `version-${version}.pmvault`) continue;
+        if (this.vaultId && m.appProperties.pm_vault && m.appProperties.pm_vault !== this.vaultId) continue;
         const size = Number(m.size); if (!Number.isSafeInteger(size) || size <= 0 || size > MAX) throw new Error('Недопустимый размер версии Drive.');
         total += size; if (total > 64 * 1024 * 1024 || remote.size >= 1000) throw new Error('История Drive превышает безопасный предел.');
         const identity = id(m.id); active.add(identity);
@@ -92,6 +94,7 @@ export class DriveTransport {
           const cached = this.cache.get(identity);
           const blob = revision && cached?.revision === revision ? cached.blob : await this.call('GET', API + '/' + identity + '?alt=media', { binary: true, limit: MAX });
           if (blob.length !== size) throw new Error('Передача версии не завершена.');
+          if (this.vaultId && inspect(blob).header.vault_id !== this.vaultId) continue;
           if (remote.has(version) && !equal(remote.get(version), blob)) throw new Error('Разные данные с одним номером облачной версии.');
           remote.set(version, blob);
           if (revision) this.cache.set(identity, { revision, blob }); else this.cache.delete(identity);
@@ -107,7 +110,7 @@ export class DriveTransport {
     const remote = this.remote ?? await this.fetch(), previous = remote.find(v => v.id === version);
     if (previous) { if (!equal(previous.blob, blob)) throw new Error('Облачная версия отличается от локальной очереди.'); return previous.blob; }
     const identity = await this.generateId(), boundary = 'pm_' + crypto.randomUUID().replaceAll('-', '');
-    const metadata = { id: identity, name: `version-${version}.pmvault`, parents: [this.folder], mimeType: 'application/octet-stream', appProperties: { pm_app: APP, pm_object: identity, pm_version: version } };
+    const metadata = { id: identity, name: backupName(this.vaultName), parents: [this.folder], mimeType: 'application/octet-stream', appProperties: { pm_app: APP, pm_object: identity, pm_version: version, ...(this.vaultId ? { pm_vault: this.vaultId } : {}) } };
     const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`, canonical(metadata), `\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`, blob, `\r\n--${boundary}--\r\n`]);
     const result = await this.call('POST', 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { body, type: 'multipart/related; boundary=' + boundary });
     if (result.id !== identity) throw new Error('Публикация Drive не подтверждена.');
@@ -122,7 +125,7 @@ export class DriveTransport {
       for (const m of files) if (owned(m) && (m.appProperties.pm_checkpoint === '1' || m.appProperties.pm_version)) {
         const size = Number(m.size);
         if (!Number.isSafeInteger(size) || size < 1 || size > 16 * 1024 * 1024) throw new Error('Недопустимый размер копии Drive.');
-        result.push({ id: id(m.id), name: m.name, size, version: m.appProperties.pm_version || null, modifiedAt: m.modifiedTime || m.createdTime || '' });
+        result.push({ id: id(m.id), name: m.name, vaultName: nameFromBackup(m.name), vaultId: m.appProperties.pm_vault || null, size, version: m.appProperties.pm_version || null, modifiedAt: m.modifiedTime || m.createdTime || '' });
       }
     }
     // Wire UUIDs are random, not a recency order. Offer full snapshots first.
@@ -131,11 +134,31 @@ export class DriveTransport {
   async readCheckpoint(identity) { return this.call('GET', API + '/' + id(identity) + '?alt=media', { binary: true, limit: 16 * 1024 * 1024 }); }
   async checkpoint(vaultId, blob) {
     if (!blob.length || blob.length > 16 * 1024 * 1024) throw new Error('Копия Drive превышает 16 МиБ.');
+    await this.folders();
     const identity = await this.generateId(), boundary = 'pm_' + crypto.randomUUID().replaceAll('-', '');
-    const metadata = { id: identity, name: `vault-${new Date().toISOString()}-${vaultId}.pmvault`, parents: [this.folder], mimeType: 'application/octet-stream', appProperties: { pm_app: APP, pm_object: identity, pm_checkpoint: '1' } };
+    const metadata = { id: identity, name: backupName(this.vaultName), parents: [this.folder], mimeType: 'application/octet-stream', appProperties: { pm_app: APP, pm_object: identity, pm_checkpoint: '1', pm_vault: vaultId } };
     const body = new Blob([`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`, canonical(metadata), `\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`, blob, `\r\n--${boundary}--\r\n`]);
     const result = await this.call('POST', 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', { body, type: 'multipart/related; boundary=' + boundary });
     if (result.id !== identity || !equal(await this.readCheckpoint(identity), blob)) throw new Error('Drive не подтвердил зашифрованную копию.');
     return identity;
+  }
+  async deleteVault(vaultId) {
+    if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(vaultId)) throw new Error('Некорректный ID хранилища.');
+    // Build and validate the complete plan before deleting anything. Copied files
+    // lose the object-ID binding and are never part of this plan.
+    const copies = await this.checkpoints(), targets = [];
+    for (const copy of copies) {
+      if (copy.vaultId && copy.vaultId !== vaultId) continue;
+      const blob = await this.readCheckpoint(copy.id);
+      if (inspect(blob).header.vault_id === vaultId) targets.push(copy.id);
+    }
+    for (const identity of targets) {
+      const current = await this.call('GET', API + '/' + identity + '?fields=id,appProperties');
+      if (!owned(current) || (current.appProperties.pm_vault && current.appProperties.pm_vault !== vaultId)) throw new Error('Облачная копия изменилась. Повторите удаление.');
+      await this.call('DELETE', API + '/' + identity, { binary: true });
+      this.cache.delete(identity);
+    }
+    this.remote = null;
+    return targets.length;
   }
 }

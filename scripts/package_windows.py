@@ -30,9 +30,6 @@ with zipfile.ZipFile(out / f'PasswordManager-{version}-portable.zip', 'w', zipfi
     archive.writestr('PasswordManager/portable.flag', 'Portable data lives in ./data.\n')
     archive.writestr('PasswordManager/PORTABLE.txt', 'Запустите PasswordManager.exe. Данные хранятся в папке data рядом с EXE.\nДля переноса прежнего хранилища откройте его зашифрованный экспорт .pmvault.\nGoogle нужно подключать отдельно на каждом компьютере (защита DPAPI Windows).\n', compress_type=zipfile.ZIP_DEFLATED)
     archive.writestr('PasswordManager/SHA256SUMS.json', json.dumps(hashes, indent=2))
-with zipfile.ZipFile(out / f'PasswordManager-web-{version}.zip', 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-    for p in sorted((root / 'web/password-manager/dist').rglob('*')):
-        if p.is_file(): archive.write(p, p.relative_to(root / 'web/password-manager/dist').as_posix())
 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 version_info = build / 'VersionInfo.cs'
 numeric_version = version + '.0' * (4 - len(version.split('.')))
@@ -42,7 +39,7 @@ uninstall = build / 'Uninstall.exe'
 subprocess.run([*common, '/define:UNINSTALLER', '/out:' + str(uninstall), str(root / 'scripts/Setup.cs'), str(version_info)], check=True)
 setup = out / 'PasswordsManager.exe'
 subprocess.run([*common, '/out:' + str(setup), '/resource:' + str(build / 'payload.zip') + ',payload.zip', '/resource:' + str(build / 'payload.sha256') + ',payload.sha256', '/resource:' + str(uninstall) + ',uninstall.exe', str(root / 'scripts/Setup.cs'), str(version_info)], check=True)
-release_files = [setup, out / f'PasswordManager-{version}-portable.zip', out / f'PasswordManager-web-{version}.zip']
+release_files = [setup, out / f'PasswordManager-{version}-portable.zip']
 manifest = {'version': version, 'installed': False, 'published': False, 'files': {p.name: {'bytes':p.stat().st_size, 'sha256':hashlib.sha256(p.read_bytes()).hexdigest()} for p in release_files}}
 (out / 'manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
 print(json.dumps(manifest, indent=2))

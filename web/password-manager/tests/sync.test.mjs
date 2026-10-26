@@ -88,6 +88,7 @@ function fakeDrive() {
       } else { metadata = core.parseStrict(options.body); blob = new Uint8Array(); }
       files.set(metadata.id, { ...metadata, blob, size: String(blob.length), version: '1' }); return response({ id: metadata.id });
     }
+    if (options.method === 'DELETE') { files.delete(u.pathname.split('/').at(-1)); return new Response(new Uint8Array()); }
     if (u.searchParams.get('alt') === 'media') {
       const f = files.get(u.pathname.split('/').at(-1)); return response(failReadback ? new Uint8Array([1]) : f.blob);
     }
@@ -95,10 +96,41 @@ function fakeDrive() {
       const q = u.searchParams.get('q');
       return response({ files: [...files.values()].filter(f => q.includes('mimeType =') ? f.mimeType === 'application/vnd.google-apps.folder' : f.parents?.includes(q.match(/'([^']+)' in parents/)[1])).map(({ blob, ...meta }) => meta) });
     }
+    if (options.method === 'GET' && files.has(u.pathname.split('/').at(-1))) { const { blob, ...metadata } = files.get(u.pathname.split('/').at(-1)); return response(metadata); }
     throw new Error('Unexpected fake URL ' + url);
   };
   return { fetcher, files, calls, failReadback: () => { failReadback = true; } };
 }
+test('named Drive vaults remain isolated; deletion includes legacy history and preserves other vaults and manual copies', async () => {
+  const fake = fakeDrive(), first = await core.createVault('тест1234'), second = await core.createVault('другой12');
+  first.document.settings.vault_name = 'Main';
+  const blob = await core.encodeVault(first.access, first.document), otherBlob = await core.encodeVault(second.access, second.document);
+  const a = new DriveTransport('TEST-TOKEN', { fetcher: fake.fetcher, vaultId: first.access.header.vault_id, vaultName: 'Main' });
+  await a.publish(crypto.randomUUID(), blob);
+  await a.checkpoint(first.access.header.vault_id, blob);
+  const b = new DriveTransport('TEST-TOKEN', { fetcher: fake.fetcher, vaultId: second.access.header.vault_id, vaultName: 'Other' });
+  await b.publish(crypto.randomUUID(), otherBlob);
+  const legacy = [...fake.files.values()].find(f => f.appProperties.pm_version);
+  delete legacy.appProperties.pm_vault; legacy.name = 'version-' + legacy.appProperties.pm_version + '.pmvault';
+  fake.files.set('manualCopy', { ...legacy, id: 'manualCopy' });
+  const own = await a.fetch(); assert.equal(own.length, 1); assert.deepEqual(own[0].blob, blob);
+  const copies = await a.checkpoints();
+  assert.ok(copies.some(c => /^Main-Backup-\d{4}-\d\d-\d\d-\d\d:\d\d:\d\d\.pmvault$/.test(c.name) && c.vaultName === 'Main'));
+  assert.equal(await a.deleteVault(first.access.header.vault_id), 2);
+  assert.ok(fake.files.has('manualCopy'));
+  assert.equal((await b.fetch()).length, 1);
+});
+test('Drive deletion validates all target bytes before deleting any file', async () => {
+  const fake = fakeDrive(), made = await core.createVault('тест1234'), blob = await core.encodeVault(made.access, made.document);
+  const transport = new DriveTransport('TEST-TOKEN', { fetcher: fake.fetcher, vaultId: made.access.header.vault_id });
+  await transport.checkpoint(made.access.header.vault_id, blob);
+  await transport.checkpoint(made.access.header.vault_id, blob);
+  const copies = [...fake.files.values()].filter(f => f.appProperties.pm_checkpoint);
+  copies[1].blob = new Uint8Array([1]);
+  await assert.rejects(transport.deleteVault(made.access.header.vault_id));
+  assert.ok(copies.every(c => fake.files.has(c.id)));
+  assert.equal(fake.calls.filter(c => c.options.method === 'DELETE').length, 0);
+});
 test('Drive invokes fetch with the Window/global receiver required by browser WebIDL', async () => {
   async function browserFetch(url, options) {
     if (this !== globalThis) throw new TypeError("'fetch' called on an object that does not implement interface Window.");

@@ -27,10 +27,6 @@ with zipfile.ZipFile(out/f'PasswordManager-{version}-portable.zip') as archive:
 with zipfile.ZipFile(root/'build'/('setup-'+version)/'payload.zip') as archive:
     assert archive.testzip() is None and 'portable.flag' not in archive.namelist()
     assert archive.read('PasswordManager.exe')==exe.read_bytes()
-with zipfile.ZipFile(out/f'PasswordManager-web-{version}.zip') as archive:
-    assert archive.testzip() is None
-    for name in archive.namelist():
-        assert archive.read(name)==(root/'web/password-manager/dist'/name).read_bytes(),name
 for file in ['artifacts/frozen-smoke/smoke-result.json','web/password-manager/artifacts/browser/result.json']:
     assert json.loads((root/file).read_text(encoding='utf-8'))['success']
 report={'version':version,'success':True,'source_receipt_matches':True,'archives_and_hashes_valid':True,'user_vaults_and_tokens_excluded':True,'installed':False,'website_deployed':False}

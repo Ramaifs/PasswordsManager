@@ -19,8 +19,7 @@ Google описывает billing как отдельный необязател
 Открывайте [форму создания проекта](https://console.cloud.google.com/projectcreate),
 затем [Drive API](https://console.cloud.google.com/apis/library/drive.googleapis.com)
 и [Google Auth Platform](https://console.cloud.google.com/auth/overview).
-Запрос карты на конкретном экране аккаунта этой сессией не осматривался;
-причина пользовательского запроса карты пока не установлена.
+Дополнительные проверки аккаунта зависят от настроек Google Cloud.
 
 Оговорка актуальности: в 2026 Google изменил квоты и объявил платное превышение
 стандартных порогов с предварительным уведомлением. Это не основание обещать
@@ -70,3 +69,7 @@ Drive хранит видимую папку «Менеджер паролей»
 Для живой приёмки нужны два независимых профиля/компьютера и только вымышленные данные. Проверьте: отказ авторизации, подключение, повторную авторизацию/обновление токена, раздельные изменения, конфликт пароля, удаление против редактирования, офлайн-возврат, смену ключей, прерванную публикацию, очистку истории, ручную копию, удалённую папку и отключение. Фиксируйте отдельно от имитации API. Наличие JSON само по себе не подтверждает настройку consent screen, Drive API или доступ тестовых пользователей.
 
 Источники для актуализации настройки: [Desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app), [Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth), [uploads](https://developers.google.com/workspace/drive/api/guides/manage-uploads), [ошибки API](https://developers.google.com/workspace/drive/api/guides/handle-errors).
+
+## Сохранение веб-сессии
+
+Для автоматического продления входа и восстановления после перезапуска браузера используйте [серверные сессии Cloudflare Worker](../deployment/cloudflare-worker/README.md). Client secret находится только в секретах Worker. При статическом размещении остаётся короткая браузерная сессия.

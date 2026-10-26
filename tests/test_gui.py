@@ -26,6 +26,50 @@ def test_sidebar_context_actions_and_nested_categories(window):
     assert not sidebar.findChildren(QToolButton)
 
 
+def test_all_entries_category_color_caption_and_named_export(window):
+    from password_manager import model
+    from PySide6.QtWidgets import QLabel
+    from PySide6.QtCore import Qt
+    cid = window.session.mutate(lambda doc: model.category(doc, 'Работа'))
+    window.session.mutate(lambda doc: doc['settings'].update(vault_name='Main', category_colors={cid: '#24aabb'}))
+    window.session.mutate(lambda doc: model.save_entry(doc, {'title': 'Почта', 'category': cid}))
+    window.refresh_categories()
+    window.categories.setCurrentRow(0)
+    window.refresh_entries()
+    item = window.entries.item(0)
+    assert item.foreground().color().name() == '#24aabb'
+    assert [label.text() for label in window.entries.itemWidget(item).findChildren(QLabel)] == ['Почта', 'Работа']
+    window.show()
+    QApplication.processEvents()
+    assert all(label.height() >= label.fontMetrics().height() for label in window.entries.itemWidget(item).findChildren(QLabel))
+    assert window.export_filename() == 'Main-vault-export.pmvault'
+    window.session.mutate(lambda doc: model.delete_category(doc, cid))
+    window.refresh_entries()
+    assert window.entries.item(0).toolTip() == 'Без категории'
+
+
+def test_settings_order_separators_and_google_status(window, monkeypatch):
+    from PySide6.QtWidgets import QPushButton, QFrame
+    from types import SimpleNamespace
+    from password_manager.sync import state_id
+    from password_manager.sync_state import seed
+    def inspect(dialog):
+        labels = [button.text() for button in dialog.findChildren(QPushButton)]
+        assert labels.index('Google Drive — Действия') < labels.index('Синхронизировать сейчас')
+        assert dialog.findChild(QLabel, 'driveConnectionStatus').text() == 'Google Drive — не подключен'
+        assert dialog.findChild(__import__('PySide6').QtWidgets.QComboBox, 'settingsTheme') is not None
+        assert len([line for line in dialog.findChildren(QFrame) if line.objectName() == 'settingsSeparator']) >= 3
+        assert next(b for b in dialog.findChildren(QPushButton) if b.text().startswith('Мастер-пароль')).objectName() == 'settingsAction'
+    from PySide6.QtWidgets import QLabel
+    monkeypatch.setattr(QDialog, 'exec', inspect)
+    window.settings()
+    monkeypatch.setattr(window.cloud, 'connection', SimpleNamespace(exists=True))
+    assert 'Требует' in window.cloud.connection_status()[0]
+    state = seed(window.session.document, window.session.actor)
+    window.session.document['sync'] = {'state': state, 'pending': None, 'published': state_id(window.session.access, state), 'seen': {}}
+    assert window.cloud.connection_status() == ('Google Drive — Подключен', '#2a9d59')
+
+
 @pytest.fixture(scope="module")
 def app():
     return QApplication.instance() or QApplication([])
