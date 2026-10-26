@@ -10,6 +10,63 @@ from password_manager.storage import Store
 PASSWORD = "GUI fictional password phrase"
 
 
+def test_cloud_list_preview_export_and_last_opened_marker(window, monkeypatch, tmp_path):
+    from password_manager.cloud_browser import CloudCopiesDialog, CloudPreviewDialog
+    from password_manager.crypto import Access, unlock
+    from password_manager import model
+    from PySide6.QtWidgets import QLabel, QFrame, QFileDialog
+    identity = window.session.access.header['vault_id']
+    copies = [
+        {'id':'old', 'vaultId':identity, 'name':'Old', 'modifiedAt':'2026-10-26T10:00:00Z'},
+        {'id':'new', 'vaultId':identity, 'name':'New', 'modifiedAt':'2026-10-26T12:00:00Z'},
+        {'id':'other', 'vaultId':'other', 'name':'Other', 'modifiedAt':'2026-10-26T13:00:00Z'},
+    ]
+    chooser = CloudCopiesDialog(window, copies, identity)
+    assert chooser.findChild(QLabel, 'lastOpenedHeading').text() == 'Последнее открытое хранилище'
+    assert [r.property('copyId') for r in chooser.findChildren(QFrame) if r.property('copyId')] == ['new', 'other', 'old']
+    chooser.deleteLater()
+    access, _ = Access.create('Preview fictional password')
+    doc = model.new_document()
+    model.save_entry(doc, {'title':'Cloud record', 'password':'PREVIEW-SECRET'})
+    preview = CloudPreviewDialog(window, copies[1], access, doc)
+    assert 'PREVIEW-SECRET' not in preview.details.toPlainText()
+    preview.reveal.setChecked(True)
+    assert 'PREVIEW-SECRET' in preview.details.toPlainText()
+    exported = tmp_path / 'preview.pmvault'
+    monkeypatch.setattr(QFileDialog, 'getSaveFileName', lambda *args: (str(exported), ''))
+    preview.export()
+    assert unlock(exported.read_bytes(), 'Preview fictional password')[1] == doc
+    preview.clear()
+    preview.deleteLater()
+    before = window.session.store.snapshots()[0].read_bytes()
+    monkeypatch.setattr(window, 'ask_password', lambda *args: 'Preview fictional password')
+    monkeypatch.setattr(CloudPreviewDialog, 'exec', lambda self: self.reject())
+    window.cloud.preview_copy(copies[1], access.encode(doc))
+    assert window.session.store.snapshots()[0].read_bytes() == before
+    from password_manager.preferences import Preferences
+    assert Preferences(window.session.store.root).last_opened_vault == access.header['vault_id']
+
+
+def test_switch_cloud_copy_preserves_previous_vault_and_rebuilds_editor(window, monkeypatch):
+    from password_manager.crypto import Access, unlock
+    from password_manager import model
+    original = window.session.store.snapshots()[0].read_bytes()
+    access, _ = Access.create('New cloud fictional password')
+    doc = model.new_document()
+    eid = model.save_entry(doc, {'title':'Switched cloud record'})
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.No)
+    window.cloud.switch_to_copy(access, doc)
+    assert window.session.store.snapshots()[0].read_bytes() == original
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
+    window.cloud.switch_to_copy(access, doc)
+    assert window.session.access.header['vault_id'] == access.header['vault_id']
+    assert window.entries.count() == 1
+    assert window.session.document['entries'][eid]['title'] == 'Switched cloud record'
+    archived = next((window.session.store.root / 'switched-vaults').glob('*/0.pmvault'))
+    assert archived.read_bytes() == original
+    assert unlock(archived.read_bytes(), PASSWORD)[1]['entries'] == {}
+
+
 @pytest.mark.parametrize('mode', ['normal', 'maximized', 'fullscreen'])
 def test_window_mode_survives_minimize_tray_and_restart(window, app, monkeypatch, mode):
     from types import SimpleNamespace

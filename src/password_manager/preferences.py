@@ -15,6 +15,7 @@ class Preferences:
         self.path = Path(root) / "preferences.json"
         self.close_action = "ask"
         self.window_mode = "normal"
+        self.last_opened_vault = None
         try:
             with self.path.open("rb") as stream:
                 data = stream.read(1025)
@@ -25,6 +26,9 @@ class Preferences:
                     self.close_action = action
                 if isinstance(mode, str) and mode in WINDOW_MODES:
                     self.window_mode = mode
+                last = value.get("last_opened_vault")
+                if isinstance(last, str) and str(uuid.UUID(last)) == last:
+                    self.last_opened_vault = last
         except (OSError, ValueError, TypeError, AttributeError):
             pass
 
@@ -38,11 +42,24 @@ class Preferences:
             raise VaultError("Неизвестное состояние окна.")
         self._save(self.close_action, mode)
 
-    def _save(self, action, mode):
+    def save_last_opened_vault(self, value):
+        try:
+            if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise VaultError("Некорректный идентификатор хранилища.") from None
+        if self.last_opened_vault != value:
+            self._save(self.close_action, self.window_mode, value)
+
+    def _save(self, action, mode, last=None):
+        last = last or self.last_opened_vault
         temporary = self.path.with_name("preferences-" + uuid.uuid4().hex + ".tmp")
         try:
             with temporary.open("x", encoding="utf-8") as stream:
-                json.dump({"close_action": action, "window_mode": mode}, stream)
+                value = {"close_action": action, "window_mode": mode}
+                if last:
+                    value["last_opened_vault"] = last
+                json.dump(value, stream)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temporary, self.path)
@@ -50,3 +67,4 @@ class Preferences:
             temporary.unlink(missing_ok=True)
         self.close_action = action
         self.window_mode = mode
+        self.last_opened_vault = last

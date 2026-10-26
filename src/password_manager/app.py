@@ -246,6 +246,9 @@ class Window(QMainWindow):
         else:
             button("Открыть зашифрованный экспорт", lambda: self.safe(self.open_export), content)
             button("Восстановить доступ из файла", lambda: self.safe(lambda: self.open_export(recovery=True)), content)
+        button("Все копии Google Drive", lambda: self.safe(self.cloud.browse_copies), content)
+        if (self.session.store.root / "switched-vaults").exists():
+            button("Архив прежних хранилищ", lambda: self.safe(self.cloud.browse_archive), content)
         layout.addStretch()
         foot = QLabel("Локальное хранилище  •  Google Drive приостановлен до разблокировки")
         foot.setObjectName("caption")
@@ -387,6 +390,10 @@ class Window(QMainWindow):
         self.build_editor()
 
     def build_editor(self):
+        try:
+            self.preferences.save_last_opened_vault(self.session.access.header["vault_id"])
+        except OSError:
+            self.toast("Не удалось запомнить последнее открытое хранилище")
         page = QWidget()
         outer = QVBoxLayout(page)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -1200,6 +1207,9 @@ class Window(QMainWindow):
         action("Мастер-пароль и ключ восстановления…", self.security_settings)
         separator()
         action("Google Drive — Действия", self.cloud.menu)
+        action("Все копии Google Drive", self.cloud.browse_copies)
+        if (self.session.store.root / "switched-vaults").exists():
+            action("Архив прежних хранилищ", self.cloud.browse_archive)
         drive_status = QLabel()
         drive_status.setObjectName("driveConnectionStatus")
         layout.addWidget(drive_status)

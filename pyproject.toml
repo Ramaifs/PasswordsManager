@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-password-manager"
-version = "0.38"
+version = "0.39"
 license = "LicenseRef-All-Rights-Reserved"
 license-files = ["LICENSE.txt", "THIRD_PARTY_NOTICES.md"]
 description = "Локальный менеджер паролей для Windows"

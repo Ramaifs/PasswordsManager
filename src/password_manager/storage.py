@@ -29,6 +29,23 @@ def write_fsynced(path, data):
         os.fsync(stream.fileno())
 
 
+def export_blob(destination, blob):
+    destination = Path(destination)
+    if destination.exists():
+        raise VaultError("Для экспорта выберите новое имя файла.")
+    temporary = destination.with_name(f".{uuid.uuid4()}.tmp")
+    try:
+        write_fsynced(temporary, blob)
+        if os.name == "nt":
+            os.rename(temporary, destination)
+        else:
+            os.link(temporary, destination)
+    except OSError:
+        raise StorageError() from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 class Store:
     def __init__(self, root):
         self.root = Path(root)
@@ -107,6 +124,26 @@ class Store:
                 blobs.append(blob)
         self._publish(blobs)
 
+    def switch_to_copy(self, access, document):
+        """Archive every current ciphertext before selecting an independent vault."""
+        model.validate(document)
+        encoded = access.encode(document)
+        archive = None
+        if self.exists:
+            archive = self.root / "switched-vaults" / str(uuid.uuid4())
+            try:
+                archive.mkdir(parents=True)
+                for index, source in enumerate(self.snapshots()):
+                    blob = read_bounded(source)
+                    target = archive / f"{index}.pmvault"
+                    write_fsynced(target, blob)
+                    if read_bounded(target) != blob:
+                        raise StorageError()
+            except OSError:
+                raise StorageError() from None
+        self._publish([encoded])
+        return archive
+
     def _publish(self, blobs):
         folder = self.root / str(uuid.uuid4())
         pointer = self.root / f"pointer-{uuid.uuid4()}.tmp"
@@ -144,21 +181,8 @@ class Store:
         return pending
 
     def export(self, destination):
-        destination = Path(destination)
-        if destination.exists():
-            raise VaultError("Для экспорта выберите новое имя файла.")
         blob = read_bounded(self.snapshots()[0])
-        temporary = destination.with_name(f".{uuid.uuid4()}.tmp")
-        try:
-            write_fsynced(temporary, blob)
-            if os.name == "nt":
-                os.rename(temporary, destination)  # Windows refuses an existing destination.
-            else:
-                os.link(temporary, destination)
-        except OSError:
-            raise StorageError() from None
-        finally:
-            temporary.unlink(missing_ok=True)
+        export_blob(destination, blob)
 
     def restore_backup(self, access, current, index):
         if not 1 <= index < len(self.snapshots()):

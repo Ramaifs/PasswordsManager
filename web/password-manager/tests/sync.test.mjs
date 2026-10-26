@@ -177,7 +177,8 @@ test('Drive creates owned folder, uploads encrypted versions, reads back, retrie
   await transport.checkpoint(crypto.randomUUID(), bytes);
   const copies = await transport.checkpoints();
   assert.equal(copies.length, 2);
-  assert.equal(copies[0].version, null, 'full checkpoints should precede randomly named wire versions');
+  assert.ok(copies.some(copy => copy.version === null));
+  assert.ok(copies.some(copy => copy.version === id));
   assert.equal((await transport.fetch()).length, 1); // checkpoint excluded from shared wire
   const metadata = [...fake.files.values()].find(f => f.appProperties.pm_version);
   metadata.appProperties.pm_object = 'copied-object'; assert.equal((await transport.fetch()).length, 0);

@@ -340,16 +340,24 @@ try:
     click('[data-action="switch-vault"]')
     wait("document.querySelector('h1')?.textContent.includes('Пространство')")
     import base64
+    previous_opened = js("localStorage.getItem('pm-last-opened-vault')")
     source = root / 'artifacts' / 'python-compatible.pmvault'
     b64 = base64.b64encode(source.read_bytes()).decode('ascii')
     js("""{ const bytes=Uint8Array.from(atob(%s),c=>c.charCodeAt(0)); const file=new File([bytes],'Из Windows.pmvault',{type:'application/octet-stream'}); const transfer=new DataTransfer(); transfer.items.add(file); const input=document.querySelector('#file-input'); input.files=transfer.files; input.dispatchEvent(new Event('change',{bubbles:true})); }""" % json.dumps(b64))
     wait("Boolean(document.querySelector('#unlock-form'))")
+    assert js("localStorage.getItem('pm-last-opened-vault')") == previous_opened
+    fill('#unlock-secret', 'invalid8')
+    submit('#unlock-form')
+    wait("Boolean(document.querySelector('#form-error')?.textContent)")
+    assert js("localStorage.getItem('pm-last-opened-vault')") == previous_opened
     fill('#unlock-secret', 'новый123')
     submit('#unlock-form')
     wait("document.querySelector('.record strong')?.textContent === 'Из Python'")
     click('.record')
     assert js("document.querySelector('#entry-note').value.includes('Кириллица и emoji')")
     results.append('desktop-file-import-through-real-ui-handler')
+    assert js("localStorage.getItem('pm-last-opened-vault')") != previous_opened
+    results.append('last-opened-vault-changes-only-after-successful-unlock')
     js("window.qaSettingsDownloads=[];window.qaSettingsOriginalClick=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){window.qaSettingsDownloads.push(this.download)}")
     click('[data-action="settings"]')
     submit('#settings-form')
@@ -377,7 +385,7 @@ try:
     wait("!document.querySelector('#modal').open")
     color_child = js("document.querySelector('[data-category-depth=\"1\"] [data-action=manage-category]').dataset.id")
     results.append('category-and-subcategory-custom-colors-before-drive-sync')
-    js(r"""window.qaFiles=new Map(); window.qaSerial=0; window.qaModified=0; window.qaOffline=false;
+    js(r"""window.qaFiles=new Map(); window.qaSerial=0; window.qaModified=0; window.qaModifiedBase=Date.now(); window.qaOffline=false;
     window.google={accounts:{oauth2:{hasGrantedAllScopes:()=>true,initTokenClient:config=>{window.qaClientId=config.client_id;return {requestAccessToken:()=>{window.qaGoogleAuths=(window.qaGoogleAuths||0)+1;setTimeout(()=>config.callback({access_token:'QA-TOKEN',expires_in:3600}),0)}}}}}};
     window.fetch=async(url,options)=>{
       if(window.qaNetworkDelay)await new Promise(resolve=>setTimeout(resolve,window.qaNetworkDelay));
@@ -391,7 +399,7 @@ try:
         if(options.body instanceof Blob){const boundary=options.headers['Content-Type'].split('boundary=')[1],parts=(await options.body.text()).split('--'+boundary);m=JSON.parse(parts[1].split('\r\n\r\n')[1].trim());blob=new TextEncoder().encode(parts[2].split('\r\n\r\n')[1].slice(0,-2));}
         else {m=JSON.parse(new TextDecoder().decode(options.body));blob=new Uint8Array();}
         if(window.qaFailPublish&&m.appProperties.pm_version)throw new Error('QA publish interrupted');
-        window.qaFiles.set(m.id,{...m,blob,size:String(blob.length),version:'1',modifiedTime:new Date(1700000000000+(++window.qaModified)).toISOString()});return reply({id:m.id});
+        window.qaFiles.set(m.id,{...m,blob,size:String(blob.length),version:'1',modifiedTime:new Date(window.qaModifiedBase+(++window.qaModified)).toISOString()});return reply({id:m.id});
       }
       if(options.method==='DELETE'){window.qaFiles.delete(u.pathname.split('/').pop());return reply(new Uint8Array())}
       if(!u.searchParams.get('alt')&&window.qaFiles.has(u.pathname.split('/').pop())){const {blob,...metadata}=window.qaFiles.get(u.pathname.split('/').pop());return reply(metadata)}
@@ -419,6 +427,17 @@ try:
     assert js("[...window.qaFiles.values()].some(f=>f.appProperties.pm_version)")
     assert js("[...window.qaFiles.values()].every(f=>!new TextDecoder().decode(f.blob).includes('PYTHON-FICTIONAL-SECRET'))")
     results.append('simulated-google-auth-and-encrypted-drive-publish-readback')
+    click('[data-action="settings"]')
+    click('[data-action="drive-settings"]')
+    click('[data-action="drive-list"]')
+    wait("Boolean(document.querySelector('.last-opened-copy'))")
+    assert js("document.querySelector('.last-opened-section h3').textContent === 'Последнее открытое хранилище'")
+    assert js("document.querySelector('.last-opened-copy>div').getBoundingClientRect().width > 200")
+    assert js("(()=>{const all=[...window.qaFiles.values()].filter(f=>f.appProperties?.pm_checkpoint||f.appProperties?.pm_version).sort((a,b)=>Date.parse(b.modifiedTime)-Date.parse(a.modifiedTime));return document.querySelector('.last-opened-copy').dataset.copyId===all[0].id&&document.querySelectorAll('.cloud-copy').length===all.length})()")
+    assert js("(()=>{const rows=[...document.querySelectorAll('.cloud-copy:not(.last-opened-copy)')];return rows.every((row,index)=>!index||Date.parse(window.qaFiles.get(rows[index-1].dataset.copyId).modifiedTime)>=Date.parse(window.qaFiles.get(row.dataset.copyId).modifiedTime))})()")
+    screenshot('10-cloud-copies-last-opened')
+    click('[data-action="close-modal"]')
+    results.append('all-drive-copies-newest-first-with-pinned-last-opened-vault')
     generator_requests = js('window.qaRequestCount')
     js("window.qaWorkerCalls=0;window.qaOriginalPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(...args){window.qaWorkerCalls++;return window.qaOriginalPost.apply(this,args)};window.qaOffline=true")
     click('[data-action="generator"]')
@@ -617,11 +636,17 @@ try:
     wait("!document.body.classList.contains('busy')",30)
     assert js("[...window.qaFiles.values()].every(f=>f.mimeType==='application/vnd.google-apps.folder')")
     results.append('delete-entire-cloud-vault-cancel-and-confirm')
+    last_opened = js("localStorage.getItem('pm-last-opened-vault')")
     page.triggerAction(QWebEnginePage.WebAction.Reload)
     wait("Boolean(document.querySelector('#create-location'))")
     assert js("!document.querySelector('[data-action=open-recent]')")
     assert js("!document.body.textContent.includes('Прежние хранилища браузера')")
     results.append('reload-does-not-restore-session-vault-from-browser-storage')
+    assert js("localStorage.getItem('pm-last-opened-vault')") == last_opened
+    js("void import(new URL('/cloud-backups.js',location.href).href).then(module=>window.qaLastOpenedAfterReload=module.lastOpenedVault())")
+    wait("Boolean(window.qaLastOpenedAfterReload)")
+    assert js('window.qaLastOpenedAfterReload') == last_opened
+    results.append('last-opened-vault-uuid-survives-real-browser-reload')
     js("""{const req=indexedDB.open('personal-password-manager-v1',1);req.onupgradeneeded=()=>req.result.createObjectStore('vaults',{keyPath:'id'});req.onsuccess=()=>{const db=req.result,tx=db.transaction('vaults','readwrite');tx.objectStore('vaults').put({id:'legacy-fixture',name:'OLD-BROWSER-FIXTURE',blob:Uint8Array.from(atob(%s),c=>c.charCodeAt(0))});tx.oncomplete=()=>db.close();};}""" % json.dumps(b64))
     process(.3)
     page.triggerAction(QWebEnginePage.WebAction.Reload)

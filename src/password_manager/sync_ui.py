@@ -3,7 +3,7 @@ from threading import Event
 from time import monotonic
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QDialog
 
 from .crypto import unb64
 from .drive import DriveTransport, FolderMissing
@@ -117,11 +117,13 @@ class SyncUI(QObject):
         if not self.connection.exists:
             self.connect()
             return
-        choices = (["Синхронизировать", "Отключить Google", "Создать папку заново", "Удалить облачные версии"]
+        choices = (["Все копии Google Drive", "Синхронизировать", "Отключить Google", "Создать папку заново", "Удалить облачные версии"]
                    if self.connection.exists else ["Подключить Google"])
         choice, ok = QInputDialog.getItem(window, "Google Drive", "Действие", choices, editable=False)
         if not ok: return
-        if choice == "Подключить Google":
+        if choice == "Все копии Google Drive":
+            self.browse_copies()
+        elif choice == "Подключить Google":
             self.connect()
         elif choice == "Синхронизировать":
             self.sync()
@@ -164,59 +166,97 @@ class SyncUI(QObject):
         self._start(lambda: authorize(client, self.cancel), connected)
 
     def open_from_drive(self):
-        """Restore an existing encrypted vault; Google never replaces its master password."""
-        if self.busy or self.window.session.store.exists:
+        self.browse_copies()
+
+    def browse_copies(self):
+        if self.busy:
+            return
+        if self.window.session.unlocked and not self.window.leave_editor():
             return
         self.cancel = Event()
-        def fetch_versions(_=None):
+        def fetch_copies(_=None):
             transport = self.transport_factory(self.connection, self.cancel)
-            self.window.toast("Синхронизация..", persistent=True)
-            self._start(transport.fetch, open_version, allow_locked=True)
-        def open_version(remote):
-            if not remote:
-                self.window.toast("В Google Drive пока нет хранилища. Создайте его на этом устройстве.")
-                return
-            versions = sorted(remote)
-            version = versions[0]
-            if len(versions) > 1:
-                version, ok = QInputDialog.getItem(self.window, "Google Drive", "Выберите версию для открытия. После разблокировки остальные изменения будут объединены.", versions, editable=False)
-                if not ok:
-                    self.window.toast("Открытие отменено")
-                    return
-            from .crypto import unlock
-            from . import model, sync_state
-            from .sync import version_payload
-            secret = self.window.master.text() or self.window.ask_password("Мастер-пароль облачного хранилища")
-            if secret is None:
-                self.window.toast("Открытие отменено")
-                return
-            access, _ = unlock(remote[version], secret)
-            payload = version_payload(remote[version], access, version)
-            doc = model.new_document()
-            doc["sync"] = {"state": payload["state"], "pending": None, "published": None, "seen": {}}
-            doc = sync_state.project(doc, payload["state"])
-            # A new profile may have been created while authorization was pending.
-            if self.window.session.store.exists or self.window.session.unlocked:
-                raise VaultError("Локальное хранилище уже существует. Разблокируйте его для синхронизации.")
-            self.window.session.store.commit(access, doc)
-            self.window.session.access, self.window.session.document = access, doc
-            self.window.master.clear()
-            self.window.build_editor()
-            self.sync()
+            self._start(transport.checkpoints, lambda copies: self.show_copies(transport, copies), allow_locked=True)
         if self.connection.exists:
-            fetch_versions()
+            fetch_copies()
+            return
+        path = Path(__file__).with_name("google-desktop.json")
+        if not path.exists():
+            selected, _ = QFileDialog.getOpenFileName(self.window, "OAuth JSON типа Desktop app", "", "JSON (*.json)")
+            if not selected:
+                return
+            path = Path(selected)
+        client = config(path)
+        def connected(value):
+            self.connection.save(value)
+            fetch_copies()
+        self._start(lambda: authorize(client, self.cancel), connected, allow_locked=True)
+
+    def show_copies(self, transport, copies):
+        from .cloud_browser import CloudCopiesDialog
+        dialog = CloudCopiesDialog(self.window, copies, self.window.preferences.last_opened_vault)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        copy = dialog.selected_copy
+        dialog.deleteLater()
+        if accepted and copy:
+            self._start(lambda: transport.read_checkpoint(copy), lambda blob: self.preview_copy(copy, blob), allow_locked=True)
+
+    def preview_copy(self, copy, blob):
+        from .crypto import unlock
+        from . import model, sync_state
+        from .sync import version_payload
+        from .cloud_browser import CloudPreviewDialog
+        secret = self.window.ask_password("Мастер-пароль выбранной копии")
+        if secret is None:
+            return
+        access, payload = unlock(blob, secret)
+        if copy.get("version"):
+            payload = version_payload(blob, access, copy["version"])
+            document = model.new_document()
+            document["sync"] = {"state": payload["state"], "pending": None, "published": None, "seen": {}}
+            document = sync_state.project(document, payload["state"])
+            if copy.get("vaultName"):
+                from .vault_names import validate_name
+                document["settings"]["vault_name"] = validate_name(copy["vaultName"])
         else:
-            path = Path(__file__).with_name("google-desktop.json")
-            if not path.exists():
-                selected, _ = QFileDialog.getOpenFileName(self.window, "OAuth JSON типа Desktop app", "", "JSON (*.json)")
-                if not selected:
-                    return
-                path = Path(selected)
-            client = config(path)
-            def connected(value):
-                self.connection.save(value)
-                fetch_versions()
-            self._start(lambda: authorize(client, self.cancel), connected, allow_locked=True)
+            document = model.validate(payload)
+        try:
+            self.window.preferences.save_last_opened_vault(access.header["vault_id"])
+        except OSError:
+            self.window.toast("Не удалось запомнить последнее открытое хранилище")
+        dialog = CloudPreviewDialog(self.window, copy, access, document)
+        self.window.last_activity = monotonic()
+        dialog.exec()
+        switch = dialog.switch_requested
+        dialog.clear()
+        dialog.deleteLater()
+        if switch:
+            self.switch_to_copy(access, document)
+
+    def switch_to_copy(self, access, document):
+        from .session import Session
+        if self.window.session.unlocked and not self.window.leave_editor():
+            return
+        if self.window.session.store.exists:
+            answer = QMessageBox.question(self.window, "Переключить хранилище?", "Выбранная копия станет рабочим хранилищем. Прежнее хранилище и все его локальные резервные состояния будут сохранены в зашифрованном архиве. Продолжить?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        archive = self.window.session.store.switch_to_copy(access, document)
+        self.window.lock_vault()
+        self.window.session = Session(self.window.session.store)
+        self.window.session.access, self.window.session.document = access, document
+        self.window.selected_id = None
+        self.window.dirty = False
+        self.window.master.clear()
+        self.reset_schedule()
+        self.window.build_editor()
+        self.window.toast("Рабочее хранилище переключено" + (". Прежние копии: " + str(archive) if archive else ""))
+
+    def browse_archive(self):
+        from .storage import read_bounded
+        path, _ = QFileDialog.getOpenFileName(self.window, "Архив прежних хранилищ", str(self.window.session.store.root / "switched-vaults"), "Хранилище (*.pmvault)")
+        if path:
+            self.preview_copy({"id": "local-archive", "name": Path(path).name, "version": None}, read_bounded(path))
 
     def sync(self):
         if self.busy or not self.window.session.unlocked or not self.connection.exists:

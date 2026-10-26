@@ -7,6 +7,7 @@ import urllib.parse
 from . import http_client
 from .crypto import canonical, parse, checked_envelope
 from .vault_names import backup_name
+from .cloud_backups import ordered_copies
 from .oauth import bearer
 from .sync import SyncError, MAX_CLOUD, MAX_VERSIONS
 
@@ -62,7 +63,7 @@ class DriveTransport:
         page, files = None, []
         tokens = set()
         for _ in range(100):
-            params = {"q": query, "pageSize": "1000", "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,appProperties,size,md5Checksum,parents)"}
+            params = {"q": query, "pageSize": "1000", "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,appProperties,size,md5Checksum,parents,modifiedTime,createdTime)"}
             if page: params["pageToken"] = page
             result = self._call("GET", API + "?" + urllib.parse.urlencode(params), limit=2 * 1024 * 1024)
             if result.get("incompleteSearch") or not isinstance(result.get("files"), list):
@@ -148,6 +149,43 @@ class DriveTransport:
                 objects.setdefault(version, []).append(identity)
         self.objects = objects
         return remote
+
+    def checkpoints(self):
+        copies = []
+        for folder in self.folders():
+            query = f"trashed = false and '{folder}' in parents and appProperties has {{ key='pm_app' and value='{APP}' }}"
+            for metadata in self._list(query):
+                if not self._owned(metadata):
+                    continue
+                props = metadata["appProperties"]
+                version = props.get("pm_version")
+                if not version and props.get("pm_checkpoint") != "1":
+                    continue
+                if version:
+                    from .sync_state import identifier
+                    identifier(version)
+                try:
+                    size = int(metadata.get("size", -1))
+                except (ValueError, TypeError):
+                    size = -1
+                if not 0 < size <= 16 * 1024 * 1024:
+                    raise SyncError("Недопустимый размер копии Drive.")
+                name = metadata.get("name", "")
+                match = re.fullmatch(r"(.+)-Backup-\d{4}-\d\d-\d\d-\d\d:\d\d:\d\d\.pmvault", name)
+                copies.append({"id": file_id(metadata["id"]), "name": name,
+                    "vaultName": match[1] if match else None, "vaultId": props.get("pm_vault"),
+                    "size": size, "version": version, "modifiedAt": metadata.get("modifiedTime", ""),
+                    "createdAt": metadata.get("createdTime", ""), "md5Checksum": metadata.get("md5Checksum")})
+        return ordered_copies(copies)
+
+    def read_checkpoint(self, copy):
+        blob = self._call("GET", API + "/" + file_id(copy["id"]) + "?alt=media", json=False, limit=16 * 1024 * 1024)
+        if len(blob) != copy["size"] or (copy.get("md5Checksum") and hashlib.md5(blob).hexdigest() != copy["md5Checksum"]):
+            raise SyncError("Google не подтвердил целостность копии.")
+        envelope = checked_envelope(blob)
+        if copy.get("vaultId") and envelope["header"]["vault_id"] != copy["vaultId"]:
+            raise SyncError("Хранилище в копии не совпадает с выбранным.")
+        return blob
 
     def publish(self, version, blob):
         if str(uuid.UUID(version)) != version or not 0 < len(blob) <= MAX_CLOUD:

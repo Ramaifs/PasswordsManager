@@ -2,6 +2,7 @@
 import { parseStrict, canonical } from './core.js';
 import { inspect } from './core.js';
 import { backupName, nameFromBackup } from './vault-names.js';
+import { orderedCopies } from './cloud-backups.js';
 const API = 'https://www.googleapis.com/drive/v3/files';
 const APP = 'personal-password-manager-v1', FOLDER = 'application/vnd.google-apps.folder';
 const MAX = 4 * 1024 * 1024;
@@ -125,11 +126,10 @@ export class DriveTransport {
       for (const m of files) if (owned(m) && (m.appProperties.pm_checkpoint === '1' || m.appProperties.pm_version)) {
         const size = Number(m.size);
         if (!Number.isSafeInteger(size) || size < 1 || size > 16 * 1024 * 1024) throw new Error('Недопустимый размер копии Drive.');
-        result.push({ id: id(m.id), name: m.name, vaultName: nameFromBackup(m.name), vaultId: m.appProperties.pm_vault || null, size, version: m.appProperties.pm_version || null, modifiedAt: m.modifiedTime || m.createdTime || '' });
+        result.push({ id: id(m.id), name: m.name, vaultName: nameFromBackup(m.name), vaultId: m.appProperties.pm_vault || null, size, version: m.appProperties.pm_version || null, modifiedAt: m.modifiedTime || '', createdAt: m.createdTime || '' });
       }
     }
-    // Wire UUIDs are random, not a recency order. Offer full snapshots first.
-    return result.sort((a, b) => Number(!!a.version) - Number(!!b.version) || b.modifiedAt.localeCompare(a.modifiedAt) || b.name.localeCompare(a.name));
+    return orderedCopies(result);
   }
   async readCheckpoint(identity) { return this.call('GET', API + '/' + id(identity) + '?alt=media', { binary: true, limit: 16 * 1024 * 1024 }); }
   async checkpoint(vaultId, blob) {
