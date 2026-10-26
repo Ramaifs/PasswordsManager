@@ -46,3 +46,22 @@ def test_hierarchy_validation_and_parent_rename():
     with pytest.raises(InvalidVault): model.validate(doc)
     doc['category_parents'] = {b: str(uuid.uuid4())}
     with pytest.raises(InvalidVault): model.validate(doc)
+
+
+def test_move_category_keeps_subtree_entries_and_rejects_cycles_without_mutation():
+    doc = model.new_document()
+    a = model.category(doc, 'Work')
+    b = model.category(doc, 'Mail', parent_id=a)
+    c = model.category(doc, 'Personal')
+    eid = model.save_entry(doc, {'title': 'Account', 'category': b})
+    model.move_category(doc, a, c)
+    assert model.category_path(doc, b) == 'Personal / Work / Mail'
+    assert doc['entries'][eid]['category'] == b
+    before = deepcopy(doc)
+    for source, target in [(c, b), (a, a), (str(uuid.uuid4()), c)]:
+        with pytest.raises(VaultError):
+            model.move_category(doc, source, target)
+        assert doc == before
+    model.move_category(doc, a)
+    assert a not in doc['category_parents'] and doc['category_parents'][b] == a
+    model.validate(doc)

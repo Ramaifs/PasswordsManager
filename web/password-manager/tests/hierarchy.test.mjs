@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {newDocument, validateDocument, trackChanges} from '../dist/core.js';
 import {seed, project, merge} from '../dist/sync.js';
-import {categoryRows, descendants, removeCategory} from '../dist/categories.js';
+import {categoryRows, visibleCategoryRows, moveCategory, descendants, removeCategory} from '../dist/categories.js';
 
 function fixture() {
   const doc = newDocument(), a = crypto.randomUUID(), b = crypto.randomUUID(), c = crypto.randomUUID();
@@ -12,6 +12,23 @@ function fixture() {
   doc.category_parents = {[b]:a, [c]:b};
   return {doc, a, b, c};
 }
+
+test('folding hides descendants without modifying data; moving keeps branches and prevents cycles', () => {
+  const { doc, a, b, c } = fixture();
+  const before = structuredClone(doc);
+  assert.deepEqual(visibleCategoryRows(doc, new Set([a])).map(row => row.id), [a]);
+  assert.deepEqual(doc, before);
+  assert.equal(visibleCategoryRows(doc)[0].hasChildren, true);
+  moveCategory(doc, b, null);
+  assert.deepEqual(categoryRows(doc).map(row => row.depth), [0, 0, 1]);
+  assert.equal(doc.category_parents[c], b);
+  moveCategory(doc, b, a);
+  assert.deepEqual(doc, before);
+  for (const [id, parent] of [[a, c], [b, b], ['missing', a]]) {
+    assert.throws(() => moveCategory(doc, id, parent));
+    assert.deepEqual(doc, before);
+  }
+});
 test('nested tree, subtree filter, delete promotion and legacy migration', () => {
   const {doc,a,b,c} = fixture();
   assert.deepEqual(categoryRows(doc).map(row=>row.depth), [0,1,2]);

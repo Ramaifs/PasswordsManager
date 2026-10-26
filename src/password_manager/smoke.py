@@ -48,6 +48,9 @@ def run(output):
         with tempfile.TemporaryDirectory(prefix="pm-smoke-") as temporary:
             store = Store(Path(temporary) / "vault")
             window = Window(store)
+            assert not window.windowIcon().isNull()
+            assert window.windowIcon().pixmap(32, 32).width() == 32
+            results["checks"].append("packaged-application-lock-icon")
             window.updates.scheduled = True  # Offline fixture: no GitHub request.
             master = "тест1234"
             window.session.access, window.session.document, recovery = store.create(master)
@@ -89,7 +92,7 @@ def run(output):
             window.open_or_create()
             results["checks"].append("lock-unlock")
             window.dirty = False
-            window.close()
+            window.quit_application()
             app.processEvents()
         results["success"] = True
     except Exception:

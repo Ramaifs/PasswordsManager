@@ -22,3 +22,5 @@
 @media(max-width:760px){.list-lock{display:inline-flex}.category-row{flex-direction:column}.category-row>.small{padding:2px}.category-row>.small .icon{width:12px;height:12px}}
 
 .vault-item{display:flex;align-items:center;gap:4px}.vault-item .vault-link{flex:1;min-width:0}.vault-item .vault-delete{flex-shrink:0}
+
+.category-row[draggable=true]{cursor:grab}.category-row[draggable=true]:active{cursor:grabbing}.category-toggle{flex-shrink:0;min-width:22px;font-size:15px}.category-row>.nav-link{padding-right:3px}@media(max-width:760px){.category-row>.icon-button.small{padding:2px;min-width:16px}.category-toggle{font-size:13px}}

@@ -7,9 +7,12 @@ using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 
 static class Setup {
+ [DllImport("shell32.dll", CharSet=CharSet.Unicode, ExactSpelling=true)]
+ static extern void SHChangeNotify(uint eventId, uint flags, string path, IntPtr secondItem);
  const string AppName = "Password Manager";
  static string Version { get { return ((AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(Assembly.GetExecutingAssembly(), typeof(AssemblyInformationalVersionAttribute))).InformationalVersion; } }
  const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PersonalPasswordManager";
@@ -67,8 +70,11 @@ static class Setup {
   Type type = link.GetType();
   type.InvokeMember("TargetPath", BindingFlags.SetProperty, null, link, new object[] {Path.Combine(Target,"PasswordManager.exe")});
   type.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, link, new object[] {Target});
+  type.InvokeMember("IconLocation", BindingFlags.SetProperty, null, link, new object[] {Path.Combine(Target,"PasswordManager.exe") + ",0"});
   type.InvokeMember("Description", BindingFlags.SetProperty, null, link, new object[] {"Менеджер паролей"});
   type.InvokeMember("Save", BindingFlags.InvokeMethod, null, link, null);
+  SHChangeNotify(0x2000, 0x0005, Shortcut, IntPtr.Zero);
+  SHChangeNotify(0x2000, 0x0005, Path.Combine(Target,"PasswordManager.exe"), IntPtr.Zero);
  }
  static void Install() {
   EnsureClosed();

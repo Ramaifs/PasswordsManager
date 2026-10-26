@@ -12,8 +12,11 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QFormLayout, QLineEdit, QTextEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
     QSplitter, QLabel, QMessageBox, QInputDialog, QFileDialog, QDialog, QSpinBox, QCheckBox,
     QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QToolButton, QMenu, QGridLayout,
-    QSizePolicy, QColorDialog, QFrame)
+    QSizePolicy, QColorDialog, QFrame, QSystemTrayIcon)
 from .theme import stylesheet
+from .category_list import CategoryList, HAS_CHILDREN, COLLAPSED
+from .icons import application_icon
+from .preferences import Preferences
 
 from . import model
 from .crypto import Access, recovery_secret, validate_password, MIN_MASTER_PASSWORD, MAX_MASTER_PASSWORD
@@ -55,6 +58,13 @@ class Window(QMainWindow):
     def __init__(self, store):
         super().__init__()
         self.session = Session(store)
+        self.preferences = Preferences(store.root)
+        self.collapsed_categories = set()
+        self.tray = None
+        self._pending_close_action = None
+        self._force_quit = False
+        self._close_remember = False
+        self._asking_close = False
         from .sync_ui import SyncUI
         self.cloud = SyncUI(self)
         from .updates import UpdateChecker
@@ -66,6 +76,7 @@ class Window(QMainWindow):
         self.clipboard_secret = None
         self.last_activity = time.monotonic()
         self.setWindowTitle(f"Менеджер паролей — {__version__}")
+        self.setWindowIcon(application_icon())
         self.resize(1220, 820)
         self.setMinimumSize(980, 640)
         self.setStyleSheet(stylesheet())
@@ -350,7 +361,9 @@ class Window(QMainWindow):
         caption.setObjectName("caption")
         ll.addWidget(caption)
         ll.addSpacing(12)
-        self.categories = QListWidget()
+        self.categories = CategoryList()
+        self.categories.toggleRequested.connect(lambda cid: self.safe(lambda: self.toggle_category(cid)))
+        self.categories.moveRequested.connect(lambda cid, parent: self.safe(lambda: self.move_category(cid, parent)))
         self.categories.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.categories.customContextMenuRequested.connect(self.category_context_menu)
         ll.addWidget(self.categories)
@@ -545,24 +558,72 @@ class Window(QMainWindow):
             self.dirty = True
             self.editor_heading.setText(self.fields["title"].text() or "Новая запись")
 
-    def refresh_categories(self):
+    def refresh_categories(self, selected=None):
         self.loading = True
+        current = self.categories.currentItem()
+        selected = selected if selected is not None else current.data(Qt.ItemDataRole.UserRole) if current else "all"
         self.categories.blockSignals(True)
         self.categories.clear()
         rows = model.category_rows(self.session.document)
-        for name, data in [("Все записи", "all"), ("Без категории", None), *[(('    ' * depth + '> ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
+        ids = set(self.session.document["categories"])
+        self.categories.category_ids = ids
+        self.collapsed_categories.intersection_update(ids)
+        parents = self.session.document.get("category_parents", {})
+        has_children = set(parents.values())
+        hidden = set()
+        for cid, name, depth in rows:
+            if parents.get(cid) in self.collapsed_categories or parents.get(cid) in hidden:
+                hidden.add(cid)
+        for name, data in [("Все записи", "all"), ("Без категории", None), *[(('    ' * depth + '• ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, data)
             if data in self.session.document["categories"]:
                 item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, "#9b87f5")))
+                item.setData(HAS_CHILDREN, data in has_children)
+                item.setData(COLLAPSED, data in self.collapsed_categories)
+                item.setToolTip(model.category_path(self.session.document, data))
             self.categories.addItem(item)
-        self.categories.setCurrentRow(0)
+            if data in hidden:
+                item.setHidden(True)
+            if data == selected:
+                self.categories.setCurrentItem(item)
+        if self.categories.currentItem() is None:
+            self.categories.setCurrentRow(0)
         self.categories.blockSignals(False)
         self.record_category.clear()
         self.record_category.addItem("Без категории", None)
         for cid, name, depth in rows:
             self.record_category.addItem(model.category_path(self.session.document, cid), cid)
         self.loading = False
+
+    def toggle_category(self, cid):
+        if cid not in self.session.document["categories"]:
+            return
+        current = self.categories.currentItem()
+        selected = current.data(Qt.ItemDataRole.UserRole) if current else "all"
+        hiding_selected = cid not in self.collapsed_categories and selected != cid and selected in model.category_descendants(self.session.document, cid)
+        if hiding_selected and not self.leave_editor():
+            return
+        if cid in self.collapsed_categories:
+            self.collapsed_categories.remove(cid)
+        else:
+            self.collapsed_categories.add(cid)
+        self.refresh_categories(cid if hiding_selected else selected)
+        if hiding_selected:
+            self.clear_editor()
+            self.refresh_entries()
+
+    def move_category(self, cid, parent_id):
+        if not self.session.unlocked or not self.leave_editor():
+            return False
+        if self.session.document.get("category_parents", {}).get(cid) == parent_id:
+            return False
+        self.session.mutate(lambda doc: model.move_category(doc, cid, parent_id))
+        self.collapsed_categories.discard(parent_id)
+        self.refresh_categories(cid)
+        self.clear_editor()
+        self.refresh_entries()
+        return True
 
     def refresh_entries(self):
         if not self.session.unlocked:
@@ -1030,6 +1091,9 @@ class Window(QMainWindow):
             control = button(label, lambda: self.safe(callback), layout)
             control.setObjectName("settingsAction")
             return control
+        general_heading = QLabel("Общие")
+        general_heading.setObjectName("sectionHeading")
+        layout.addWidget(general_heading)
         general = QFormLayout()
         theme = QComboBox()
         theme.setObjectName("settingsTheme")
@@ -1041,6 +1105,12 @@ class Window(QMainWindow):
         minutes.setValue(values["lock_minutes"])
         general.addRow("Тема", theme)
         general.addRow("Автоблокировка, минут", minutes)
+        close_action = QComboBox()
+        close_action.setObjectName("closeActionSetting")
+        for label, key in [("Спрашивать каждый раз", "ask"), ("Закрывать в трей", "tray"), ("Полностью закрывать", "quit")]:
+            close_action.addItem(label, key)
+        close_action.setCurrentIndex(close_action.findData(self.preferences.close_action))
+        general.addRow("При закрытии окна", close_action)
         layout.addLayout(general)
         separator()
         action("Мастер-пароль и ключ восстановления…", self.security_settings)
@@ -1093,6 +1163,7 @@ class Window(QMainWindow):
             from .vault_names import validate_name
             vault_name = validate_name(name.text())
             self.session.mutate(lambda doc: doc["settings"].update(vault_name=vault_name, theme=theme.currentData(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
+            self.preferences.save_close_action(close_action.currentData())
             self.cloud.reset_schedule()
             self.apply_theme()
             self.vault_title.setText(vault_name)
@@ -1149,7 +1220,83 @@ class Window(QMainWindow):
         dark = theme == "dark" or (theme == "system" and QGuiApplication.styleHints().colorScheme() != Qt.ColorScheme.Light)
         self.setStyleSheet(stylesheet(dark))
 
+    def choose_close_action(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Закрытие приложения")
+        dialog.setObjectName("closeChoice")
+        dialog.setMinimumWidth(420)
+        layout = QVBoxLayout(dialog)
+        tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        layout.addWidget(QLabel("Закрыть в трей или полностью?" if tray_available else "Системный трей недоступен. Закрыть приложение полностью?"))
+        note = QLabel("В трее хранилище будет заблокировано. Для возвращения нажмите значок замка рядом с часами." if tray_available else "Можно полностью выйти или отменить закрытие.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        remember = QCheckBox("Не спрашивать больше")
+        remember.setObjectName("rememberCloseAction")
+        layout.addWidget(remember)
+        controls = QHBoxLayout()
+        chosen = []
+        def select(value):
+            chosen.append(value)
+            dialog.accept()
+        tray = button("В трей", lambda: select("tray"), controls)
+        tray.setEnabled(tray_available)
+        button("Полностью", lambda: select("quit"), controls).setObjectName("primary")
+        button("Отмена", dialog.reject, controls)
+        layout.addLayout(controls)
+        self._asking_close = True
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self._asking_close = False
+        return (chosen[0], remember.isChecked()) if accepted and chosen else (None, False)
+
+    def ensure_tray(self):
+        if self.tray is not None:
+            return
+        self.tray = QSystemTrayIcon(application_icon(), self)
+        self.tray.setToolTip("Password Manager")
+        menu = QMenu(self)
+        menu.addAction("Открыть").triggered.connect(self.restore_from_tray)
+        menu.addAction("Заблокировать").triggered.connect(self.lock_vault)
+        menu.addSeparator()
+        menu.addAction("Выйти").triggered.connect(self.quit_application)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(lambda reason: self.restore_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
+
+    def restore_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if self.tray is not None:
+            self.tray.hide()
+
+    def quit_application(self):
+        self._force_quit = True
+        self._pending_close_action = "quit"
+        self.close()
+
     def closeEvent(self, event):
+        if self._asking_close:
+            event.ignore()
+            return
+        if self._pending_close_action is None:
+            action = "quit" if self._force_quit else self.preferences.close_action
+            if action == "ask":
+                action, self._close_remember = self.choose_close_action()
+            if action is None:
+                event.ignore()
+                return
+            self._pending_close_action = action
+        if self._pending_close_action == "tray" and not QSystemTrayIcon.isSystemTrayAvailable():
+            self._pending_close_action = None
+            self._close_remember = False
+            action, remember = self.choose_close_action()
+            if action != "quit":
+                event.ignore()
+                return
+            self._pending_close_action = "quit"
+            self._close_remember = remember
         if self.updates.busy:
             self.lock_vault()
             self.updates.cancel.set()
@@ -1165,12 +1312,35 @@ class Window(QMainWindow):
         if self.session.unlocked:
             try:
                 if not self.leave_editor():
+                    self._pending_close_action = None
+                    self._force_quit = False
+                    self._close_remember = False
                     event.ignore()
                     return
             except (VaultError, OSError):
                 self.error(sys.exception())
+                self._pending_close_action = None
                 event.ignore()
                 return
+        if self._close_remember:
+            try:
+                self.preferences.save_close_action(self._pending_close_action)
+            except OSError:
+                self.error(sys.exception())
+                self._pending_close_action = None
+                self._close_remember = False
+                event.ignore()
+                return
+            self._close_remember = False
+        if self._pending_close_action == "tray":
+            self.lock_vault()
+            self.ensure_tray()
+            QApplication.instance().setQuitOnLastWindowClosed(False)
+            self.tray.show()
+            self.hide()
+            self._pending_close_action = None
+            event.ignore()
+            return
         self.clear_clipboard()
         self.cloud.pause()
         self.session.lock()
@@ -1181,11 +1351,18 @@ class Window(QMainWindow):
             unregister.argtypes, unregister.restype = [HWND], BOOL
             unregister(int(self.winId()))
         self.session.store.close()
+        if self.tray is not None:
+            self.tray.hide()
+        QApplication.instance().setQuitOnLastWindowClosed(True)
         event.accept()
 
 
 def configure_app(app):
     app.setApplicationName("PersonalPasswordManager")
+    app.setWindowIcon(application_icon())
+    if os.name == "nt":
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Ramaifs.PasswordManager")
     app.setStyle("Fusion")
     translator = QTranslator(app)
     if translator.load("qtbase_ru", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):

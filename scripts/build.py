@@ -14,13 +14,14 @@ for directory in (root / "dist", root / "build"):
         raise RuntimeError("Build output resolves outside the intended workspace")
 artifacts = root / "artifacts"
 artifacts.mkdir(exist_ok=True)
-inputs = [*sorted((root / "src").rglob("*.py")), root / "scripts" / "desktop_entry.py", root / "scripts" / "build.py", root / "pyproject.toml"]
+assets = root / "src/password_manager/assets"
+inputs = [*sorted((root / "src").rglob("*.py")), *sorted(assets.glob("*")), root / "scripts" / "desktop_entry.py", root / "scripts" / "build.py", root / "pyproject.toml"]
 oauth_config = root / "src" / "password_manager" / "google-desktop.json"
 if oauth_config.exists():
     inputs.append(oauth_config)
 before = {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}
 command = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--onedir", "--windowed",
-           "--name", "PasswordManager", "--paths", str(root / "src"),
+           "--name", "PasswordManager", "--icon", str(assets / "app.ico"), "--add-data", str(assets) + ";password_manager/assets", "--paths", str(root / "src"),
            *(["--add-data", str(oauth_config) + ";password_manager"] if oauth_config.exists() else []),
            "--distpath", str(root / "dist" / __version__), "--workpath", str(root / "build" / "pyinstaller"),
            "--specpath", str(root / "build"), str(root / "scripts" / "desktop_entry.py")]

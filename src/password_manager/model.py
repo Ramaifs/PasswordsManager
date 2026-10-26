@@ -153,6 +153,18 @@ def category_descendants(doc, cid):
     return result
 
 
+def move_category(doc, cid, parent_id=None):
+    if cid not in doc["categories"] or (parent_id is not None and parent_id not in doc["categories"]):
+        raise VaultError("Категория не найдена.")
+    if parent_id in category_descendants(doc, cid):
+        raise VaultError("Категорию нельзя поместить внутрь неё самой или её подкатегории.")
+    parents = doc.setdefault("category_parents", {})
+    if parent_id is None:
+        parents.pop(cid, None)
+    else:
+        parents[cid] = parent_id
+
+
 def category_rows(doc):
     children = {}
     for cid in doc["categories"]:

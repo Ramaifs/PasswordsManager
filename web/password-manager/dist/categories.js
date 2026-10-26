@@ -23,6 +23,20 @@ export function categoryRows(doc) {
   }
   return rows;
 }
+export function visibleCategoryRows(doc, collapsed = new Set()) {
+  const hidden = new Set(), parents = doc.category_parents || {}, hasChildren = new Set(Object.values(parents));
+  return categoryRows(doc).filter(row => {
+    if (collapsed.has(parents[row.id]) || hidden.has(parents[row.id])) { hidden.add(row.id); return false; }
+    row.hasChildren = hasChildren.has(row.id); row.collapsed = collapsed.has(row.id);
+    return true;
+  });
+}
+export function moveCategory(doc, id, parent = null) {
+  if (!Object.hasOwn(doc.categories, id) || (parent !== null && !Object.hasOwn(doc.categories, parent))) throw new Error('Категория не найдена.');
+  if (descendants(doc, id).has(parent)) throw new Error('Категорию нельзя поместить внутрь неё самой или её подкатегории.');
+  doc.category_parents ??= {};
+  if (parent === null) delete doc.category_parents[id]; else doc.category_parents[id] = parent;
+}
 export function validateParents(doc) {
   const parents = doc.category_parents;
   if (!parents || typeof parents !== 'object' || Array.isArray(parents)) throw new Error('Некорректная иерархия категорий.');

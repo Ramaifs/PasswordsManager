@@ -16,7 +16,7 @@ def test_sidebar_context_actions_and_nested_categories(window):
     child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
     window.refresh_categories()
     assert window.categories.item(3).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
-    assert '> ' in window.categories.item(3).text()
+    assert '• ' in window.categories.item(3).text()
     assert [action.text() for action in window.category_menu().actions()] == ['Создать категорию']
     labels = [action.text() for action in window.category_menu(root).actions()]
     assert all(label in labels for label in ['Создать подкатегорию','Переименовать','Поменять цвет','Удалить категорию'])
@@ -46,6 +46,134 @@ def test_all_entries_category_color_caption_and_named_export(window):
     window.session.mutate(lambda doc: model.delete_category(doc, cid))
     window.refresh_entries()
     assert window.entries.item(0).toolTip() == 'Без категории'
+
+
+def test_category_arrow_click_drag_drop_and_root_move(window):
+    from PySide6.QtCore import Qt, QMimeData, QPointF
+    from PySide6.QtGui import QDropEvent
+    from PySide6.QtTest import QTest
+    from password_manager import model
+    from password_manager.category_list import MIME
+    a = window.session.mutate(lambda doc: model.category(doc, 'Work'))
+    b = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=a))
+    c = window.session.mutate(lambda doc: model.category(doc, 'Personal'))
+    window.refresh_categories()
+    window.show()
+    QApplication.processEvents()
+    def item(cid):
+        return next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == cid)
+    assert '• ' in item(b).text() and '> ' not in item(b).text()
+    rect = window.categories.visualItemRect(item(a))
+    QTest.mouseClick(window.categories.viewport(), Qt.MouseButton.LeftButton, pos=rect.topRight() + __import__('PySide6').QtCore.QPoint(-18, rect.height() // 2))
+    assert item(b).isHidden() and a in window.collapsed_categories
+    rect = window.categories.visualItemRect(item(a))
+    QTest.mouseClick(window.categories.viewport(), Qt.MouseButton.LeftButton, pos=rect.topRight() + __import__('PySide6').QtCore.QPoint(-18, rect.height() // 2))
+    assert not item(b).isHidden()
+    class Drop(QDropEvent):
+        def source(self):
+            return window.categories
+    mime = QMimeData()
+    mime.setData(MIME, a.encode('ascii'))
+    target = window.categories.visualItemRect(item(c)).center()
+    event = Drop(QPointF(target), Qt.DropAction.MoveAction, mime, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+    window.categories.dropEvent(event)
+    assert event.isAccepted()
+    assert window.session.document['category_parents'][a] == c
+    assert window.session.document['category_parents'][b] == a
+    assert window.session.store.open(PASSWORD)[1]['category_parents'][a] == c
+    assert window.move_category(a, None)
+    assert a not in window.session.document['category_parents']
+
+
+def test_close_to_tray_remembers_choice_locks_and_restores(window, monkeypatch):
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from password_manager.preferences import Preferences
+    events = []
+    window.preferences.close_action = 'ask'
+    monkeypatch.setattr(window, 'choose_close_action', lambda: ('tray', True))
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', lambda: True)
+    fake_tray = SimpleNamespace(show=lambda: events.append('show'), hide=lambda: events.append('hide'))
+    monkeypatch.setattr(window, 'ensure_tray', lambda: setattr(window, 'tray', fake_tray))
+    window.show()
+    window.close()
+    assert not window.isVisible() and not window.session.unlocked
+    assert events == ['show']
+    assert window.session.store._lock is not None
+    assert Preferences(window.session.store.root).close_action == 'tray'
+    window.restore_from_tray()
+    assert window.isVisible() and events[-1] == 'hide'
+    assert window.master.text() == ''
+
+
+def test_close_choice_dialog_and_full_exit_saved(window, monkeypatch):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QPushButton, QCheckBox
+    from password_manager.preferences import Preferences
+    window.preferences.close_action = 'ask'
+    def choose():
+        dialog = QApplication.activeModalWidget()
+        assert dialog.objectName() == 'closeChoice'
+        box = dialog.findChild(QCheckBox, 'rememberCloseAction')
+        assert not box.isChecked()
+        box.setChecked(True)
+        next(b for b in dialog.findChildren(QPushButton) if b.text() == 'Полностью').click()
+    QTimer.singleShot(0, choose)
+    window.close()
+    assert window.session.store._lock is None
+    assert Preferences(window.session.store.root).close_action == 'quit'
+
+
+def test_close_cancel_and_network_retry_ask_only_once(window, monkeypatch):
+    window.preferences.close_action = 'ask'
+    monkeypatch.setattr(window, 'choose_close_action', lambda: (None, False))
+    window.show()
+    window.close()
+    assert window.isVisible() and window.session.unlocked
+    calls = []
+    monkeypatch.setattr(window, 'choose_close_action', lambda: (calls.append(True) or 'quit', False))
+    window.cloud.worker = object()
+    window.close()
+    assert calls == [True] and window.session.store._lock is not None
+    window.cloud.worker = None
+    window.close()
+    assert calls == [True] and window.session.store._lock is None
+
+
+def test_general_settings_changes_remembered_close_action(window, monkeypatch):
+    from PySide6.QtWidgets import QComboBox, QPushButton
+    from password_manager.preferences import Preferences
+    def save(dialog):
+        selection = dialog.findChild(QComboBox, 'closeActionSetting')
+        selection.setCurrentIndex(selection.findData('tray'))
+        next(b for b in dialog.findChildren(QPushButton) if b.text() == 'Сохранить').click()
+    monkeypatch.setattr(QDialog, 'exec', save)
+    window.settings()
+    assert Preferences(window.session.store.root).close_action == 'tray'
+
+
+def test_unavailable_tray_offers_exit_without_hiding_or_trapping(window, monkeypatch):
+    from PySide6.QtWidgets import QSystemTrayIcon
+    window.preferences.close_action = 'tray'
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', lambda: False)
+    monkeypatch.setattr(window, 'choose_close_action', lambda: (None, False))
+    window.show()
+    window.close()
+    assert window.isVisible() and window.session.unlocked
+    monkeypatch.setattr(window, 'choose_close_action', lambda: ('quit', False))
+    window.close()
+    assert window.session.store._lock is None
+
+
+def test_window_uses_website_lock_icon(window):
+    from pathlib import Path
+    import struct
+    icon = Path(__file__).resolve().parents[1] / 'src/password_manager/assets/app.ico'
+    source = Path(__file__).resolve().parents[1] / 'web/password-manager/dist/icon.svg'
+    assert icon.with_suffix('.svg').read_bytes() == source.read_bytes()
+    assert struct.unpack_from('<HHH', icon.read_bytes()) == (0, 1, 10)
+    assert not window.windowIcon().isNull()
+    assert window.windowIcon().pixmap(32, 32).width() == 32
 
 
 def test_settings_order_separators_and_google_status(window, monkeypatch):
@@ -79,13 +207,14 @@ def app():
 def window(app, tmp_path, monkeypatch):
     store = Store(tmp_path / "gui")
     widget = Window(store)
+    widget.preferences.close_action = "quit"
     widget.updates.scheduled = True
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
     widget.session.access, widget.session.document, _ = store.create(PASSWORD)
     widget.build_editor()
     yield widget
     widget.dirty = False
-    widget.close()
+    widget.quit_application()
     app.processEvents()
 
 
@@ -250,7 +379,7 @@ def test_open_export_in_empty_profile(app, tmp_path, monkeypatch, recovery):
         assert exported.read_bytes() == original
     finally:
         widget.dirty = False
-        widget.close()
+        widget.quit_application()
         app.processEvents()
 
 
@@ -306,5 +435,5 @@ def test_create_with_eight_character_master(app, tmp_path, monkeypatch):
         assert store.open("12345678")[1] == widget.session.document
     finally:
         widget.dirty = False
-        widget.close()
+        widget.quit_application()
         app.processEvents()

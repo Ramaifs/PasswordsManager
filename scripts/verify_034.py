@@ -124,14 +124,14 @@ with tempfile.TemporaryDirectory(prefix='pm-034-') as temporary:
     drain(wrong)
     assert not wrong.session.unlocked and not wrong.session.store.exists
     checks.append('drive-open-wrong-master-keeps-local-profile-empty')
-    wrong.close()
+    wrong.quit_application()
     restored.lock_vault()
-    restored.close()
+    restored.quit_application()
     window.clear_editor()
     assert any(b.text() == '🔒 Заблокировать' for b in window.findChildren(QPushButton))
     window.lock_vault()
     assert not window.session.unlocked
-    window.close()
+    window.quit_application()
     checks.append('global-lock-with-no-record-selected')
     app.processEvents()
     from password_manager import paths

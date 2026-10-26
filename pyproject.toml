@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "personal-password-manager"
-version = "0.36"
+version = "0.37"
 license = "LicenseRef-All-Rights-Reserved"
 license-files = ["LICENSE.txt", "THIRD_PARTY_NOTICES.md"]
 description = "Локальный менеджер паролей для Windows"
@@ -21,7 +21,7 @@ Repository = "https://github.com/Ramaifs/PasswordsManager"
 where = ["src"]
 
 [tool.setuptools.package-data]
-password_manager = ["google-desktop.json"]
+password_manager = ["google-desktop.json", "assets/*.ico", "assets/*.svg"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
