@@ -223,12 +223,13 @@ function validateSync(meta) {
   const dots = new Set();
   for (const [key, variants] of Object.entries(registers)) {
     const [kind, id, extra] = key.split(':');
-    if (extra || !['entry', 'category', 'category_parent'].includes(kind) || !uuidPattern.test(id) || !object(variants) || !Object.keys(variants).length || Object.keys(variants).length > 4096) fail();
+    if (extra || !['entry', 'category', 'category_parent', 'category_color'].includes(kind) || !uuidPattern.test(id) || !object(variants) || !Object.keys(variants).length || Object.keys(variants).length > 4096) fail();
     for (const [dot, value] of Object.entries(variants)) {
       const [actor, counter, tail] = dot.split(':');
       if (tail || !uuidPattern.test(actor) || !/^[1-9]\d*$/.test(counter) || !Number.isSafeInteger(Number(counter)) || Number(counter) > (vector[actor] || 0) || dots.has(dot)) fail();
       dots.add(dot);
-      if (kind === 'category_parent') { if (value !== null && (typeof value !== 'string' || !uuidPattern.test(value))) fail(); }
+      if (kind === 'category_color') { if (value !== null && (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value))) fail(); }
+      else if (kind === 'category_parent') { if (value !== null && (typeof value !== 'string' || !uuidPattern.test(value))) fail(); }
       else if (kind === 'category') { if (value !== null && (!text(value) || !value.trim() || charLength(value) > 256)) fail(); }
       else if (keys(value, ['purged_at'])) { if (!timestamp(value.purged_at)) fail(); }
       else validateRecord(value, id);
@@ -243,7 +244,7 @@ function validateSync(meta) {
 }
 export function trackChanges(before, after, actor) {
   if (!after.sync) return;
-  const shared = doc => Object.fromEntries([...Object.entries(doc.categories).map(([id, v]) => ['category:' + id, v]), ...Object.entries(doc.category_parents || {}).map(([id, v]) => ['category_parent:' + id, v]), ...Object.entries(doc.entries).map(([id, v]) => ['entry:' + id, v]), ...Object.entries(doc.tombstones).map(([id, v]) => ['entry:' + id, { purged_at: v }])]);
+  const shared = doc => Object.fromEntries([...Object.entries(doc.categories).map(([id, v]) => ['category:' + id, v]), ...Object.entries(doc.category_parents || {}).map(([id, v]) => ['category_parent:' + id, v]), ...Object.entries(doc.settings.category_colors || {}).filter(([id]) => Object.hasOwn(doc.categories, id)).map(([id, v]) => ['category_color:' + id, v]), ...Object.entries(doc.entries).map(([id, v]) => ['entry:' + id, v]), ...Object.entries(doc.tombstones).map(([id, v]) => ['entry:' + id, { purged_at: v }])]);
   const a = shared(before), b = shared(after), state = after.sync.state;
   for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
     if (JSON.stringify(a[key]) === JSON.stringify(b[key])) continue;

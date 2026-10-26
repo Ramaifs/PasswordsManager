@@ -72,6 +72,66 @@ def test_two_clients_independent_edits_and_local_only_fields(clients):
     assert b.document["settings"]["theme"] == "system"
 
 
+def test_category_and_subcategory_colors_roundtrip_drive(clients):
+    (a, b, _), _ = clients
+    drive = MemoryDrive()
+    align([a, b], drive)
+    root = a.mutate(lambda doc: model.category(doc, 'Work'))
+    child = a.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
+    a.mutate(lambda doc: doc['settings'].update(category_colors={root: '#123456', child: '#abcdef'}))
+    align([a, b], drive)
+    assert b.document['settings'].get('category_colors') == {root: '#123456', child: '#abcdef'}
+    assert b.document['category_parents'][child] == root
+    b.mutate(lambda doc: doc['settings']['category_colors'].update({child: '#654321'}))
+    align([b, a], drive)
+    assert a.document['settings']['category_colors'][child] == '#654321'
+    a.mutate(lambda doc: doc['settings']['category_colors'].pop(child))
+    align([a, b], drive)
+    assert child not in b.document['settings']['category_colors']
+
+
+def test_existing_local_colors_migrate_without_reselection(clients):
+    (a, b, _), _ = clients
+    drive = MemoryDrive()
+    root = a.mutate(lambda doc: model.category(doc, 'Work'))
+    align([a, b], drive)
+    # A pre-update vault already has sync state, but its colors were local-only.
+    legacy = deepcopy(a.document)
+    legacy['settings']['category_colors'] = {root: '#112233'}
+    a.store.commit(a.access, legacy)
+    a.document = legacy
+    align([a, b], drive)
+    assert b.document['settings'].get('category_colors') == {root: '#112233'}
+
+
+def test_concurrent_color_changes_resolve_without_resurrection(clients):
+    (a, b, _), _ = clients
+    drive = MemoryDrive()
+    root = a.mutate(lambda doc: model.category(doc, 'Work'))
+    a.mutate(lambda doc: doc['settings'].update(category_colors={root: '#112233'}))
+    align([a, b], drive)
+    a.mutate(lambda doc: doc['settings']['category_colors'].update({root: '#445566'}))
+    b.mutate(lambda doc: doc['settings']['category_colors'].pop(root))
+    align([a, b], drive)
+    key = 'category_color:' + root
+    variants = sync_state.conflicts(a.document['sync']['state'])[key]
+    assert set(variants.values()) == {None, '#445566'}
+    reset = next(dot for dot, value in variants.items() if value is None)
+    SyncEngine(a).resolve(key, reset)
+    align([a, b], drive)
+    assert all(root not in s.document['settings']['category_colors'] for s in (a, b))
+    a.mutate(lambda doc: model.delete_category(doc, root))
+    align([a, b], drive)
+    assert root not in b.document['categories']
+
+
+@pytest.mark.parametrize('value', ['red', '#abc', '#1234567', 123, {'color': '#112233'}])
+def test_wire_category_color_validation(value):
+    state = sync_state.empty()
+    with pytest.raises(InvalidVault):
+        sync_state.write(state, str(uuid.uuid4()), 'category_color:' + str(uuid.uuid4()), value)
+
+
 def test_conflict_requires_explicit_choice(clients):
     (a, b, _), eid = clients
     drive = MemoryDrive()

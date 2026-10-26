@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import path from 'node:path';
 import {newDocument, validateDocument, trackChanges} from '../dist/core.js';
-import {seed, project, merge} from '../dist/sync.js';
+import {seed, project, merge, resolve, migrateCategoryColors, conflicts} from '../dist/sync.js';
 import {categoryRows, visibleCategoryRows, moveCategory, descendants, removeCategory} from '../dist/categories.js';
 
 function fixture() {
@@ -41,15 +41,44 @@ test('nested tree, subtree filter, delete promotion and legacy migration', () =>
 });
 test('parent metadata survives JS to Python and Python to JS causal projection', () => {
   const {doc} = fixture(), actor = crypto.randomUUID();
+  doc.settings.category_colors = Object.fromEntries(Object.keys(doc.categories).map((id, index) => [id, ['#123456', '#abcdef', '#654321'][index]]));
   const state = seed(doc,actor);
   doc.sync = {state,pending:null,published:null,seen:{}};
   const python = process.env.PM_TEST_PYTHON || path.resolve('../../.venv/Scripts/python.exe');
-  const code = 'import json,sys; from password_manager import model,sync_state; d=json.load(sys.stdin); model.validate(d); d=sync_state.project(d,d["sync"]["state"]); print(json.dumps(d))';
+  const code = 'import json,sys,uuid; from password_manager import model,sync_state; d=json.load(sys.stdin); model.validate(d); d["settings"].pop("category_colors",None); d=sync_state.project(d,d["sync"]["state"]); d["sync"]["state"]=sync_state.seed(d,str(uuid.uuid4())); print(json.dumps(d))';
   const result = spawnSync(python,['-c',code],{input:JSON.stringify(doc),encoding:'utf8',env:{...process.env,PYTHONPATH:path.resolve('../../src')}});
   assert.equal(result.status,0,result.stderr);
   const returned = JSON.parse(result.stdout); validateDocument(returned);
   assert.deepEqual(returned.category_parents,doc.category_parents);
   assert.deepEqual(project(returned,returned.sync.state).category_parents,doc.category_parents);
+  assert.deepEqual(returned.settings.category_colors, doc.settings.category_colors);
+  const fresh = newDocument(); fresh.sync = returned.sync;
+  assert.deepEqual(project(fresh, returned.sync.state).settings.category_colors, doc.settings.category_colors);
+});
+
+test('color migration, concurrent edits, explicit default and deletion preserve causal intent', () => {
+  const {doc, a, b} = fixture(), actor = crypto.randomUUID(), other = crypto.randomUUID();
+  doc.sync = {state: seed(doc, actor), pending: null, published: null, seen: {}};
+  doc.settings.category_colors = {[a]: '#123456', [b]: '#abcdef'};
+  migrateCategoryColors(doc, actor);
+  const key = 'category_color:' + b;
+  const left = structuredClone(doc), right = structuredClone(doc);
+  left.settings.category_colors[b] = '#654321'; delete right.settings.category_colors[b];
+  trackChanges(doc, left, actor); trackChanges(doc, right, other);
+  const merged = merge(left.sync.state, right.sync.state);
+  assert.deepEqual(new Set(Object.values(conflicts(merged)[key])), new Set(['#654321', null]));
+  let view = project(doc, merged);
+  const dot = Object.keys(merged.registers[key]).find(dot => merged.registers[key][dot] === null);
+  view = resolve(view, actor, key, dot);
+  migrateCategoryColors(view, actor);
+  assert.equal(view.settings.category_colors[b], undefined);
+  assert.deepEqual(merge(view.sync.state, merged), view.sync.state);
+  const removed = structuredClone(view); removeCategory(removed, a); trackChanges(view, removed, actor);
+  assert.equal(project(view, removed.sync.state).settings.category_colors[a], undefined);
+  for (const value of ['red', '#abc', 123, {color: '#123456'}]) {
+    const invalid = structuredClone(view); invalid.sync.state.registers[key] = {[actor + ':1']: value};
+    assert.throws(() => validateDocument(invalid));
+  }
 });
 test('concurrent parent cycle is normalized identically without deleting categories', () => {
   const doc = newDocument(), a=crypto.randomUUID(), b=crypto.randomUUID(), actor=crypto.randomUUID(), other=crypto.randomUUID();

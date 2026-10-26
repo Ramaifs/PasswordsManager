@@ -1076,12 +1076,16 @@ class Window(QMainWindow):
             QMessageBox.information(self, "Конфликты", "Неразрешённых конфликтов нет.")
             return
         key = next(iter(pending))
+        color_conflict = key.startswith("category_color:")
         variants = pending[key]
         dialog = QDialog(self)
         dialog.setWindowTitle("Выберите вариант — остальные сохраняются до подтверждения")
         dialog.resize(720, 600)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel("Ни время изменения, ни это устройство не выбирают победителя автоматически."))
+        if color_conflict:
+            cid = key.split(":")[1]
+            layout.addWidget(QLabel("Цвет категории: " + model.category_path(self.session.document, cid)))
         choices = QListWidget()
         layout.addWidget(choices)
         details = QTextEdit()
@@ -1092,7 +1096,7 @@ class Window(QMainWindow):
         dots = sorted(variants)
         for i, dot in enumerate(dots):
             value = variants[dot]
-            label = ("Удалённая категория" if value is None else value if isinstance(value, str)
+            label = (("Цвет по умолчанию" if color_conflict else "Удалённая категория") if value is None else value if isinstance(value, str)
                      else "Окончательное удаление" if "purged_at" in value
                      else value["title"] + (" (в корзине)" if value["deleted_at"] else ""))
             choices.addItem(f"Вариант {i + 1}: {label}")
@@ -1105,7 +1109,7 @@ class Window(QMainWindow):
             elif isinstance(value, dict):
                 text = "Окончательно удалено: " + value["purged_at"]
             else:
-                text = value or "Категория удалена; записи сохраняются."
+                text = value or ("Цвет по умолчанию" if color_conflict else "Категория удалена; записи сохраняются.")
             details.setPlainText(text)
         choices.currentRowChanged.connect(lambda _: show())
         reveal.toggled.connect(lambda _: show())

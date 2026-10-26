@@ -1,11 +1,12 @@
 """State-based multi-value registers with a global causal context.
 
-No clock wins, no tombstone expiry, no local settings/drafts in the wire state.
+No clock wins, no tombstone expiry, no local preferences/drafts in the wire state.
 Every actor is a new random ID per application session (safe when profiles are copied).
 """
 from copy import deepcopy
 from datetime import datetime
 import uuid
+import re
 
 from .crypto import canonical
 from .errors import InvalidVault, VaultError
@@ -43,7 +44,7 @@ def validate(state):
         for key, variants in registers.items():
             kind, eid = key.split(":")
             identifier(eid)
-            if kind not in ("entry", "category", "category_parent") or not isinstance(variants, dict) or not 1 <= len(variants) <= MAX_ACTORS:
+            if kind not in ("entry", "category", "category_parent", "category_color") or not isinstance(variants, dict) or not 1 <= len(variants) <= MAX_ACTORS:
                 raise InvalidVault()
             for dot, value in variants.items():
                 actor, counter = dot.split(":")
@@ -52,7 +53,10 @@ def validate(state):
                 if str(number) != counter or not 1 <= number <= vector.get(actor, 0) or dot in all_dots:
                     raise InvalidVault()
                 all_dots.add(dot)
-                if kind == "category_parent":
+                if kind == "category_color":
+                    if value is not None and (not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value)):
+                        raise InvalidVault()
+                elif kind == "category_parent":
                     if value is not None:
                         identifier(value)
                 elif kind == "category":
@@ -87,6 +91,7 @@ def write(state, actor, key, value):
 def shared(document):
     return {**{f"category:{k}": v for k, v in document["categories"].items()},
             **{f"category_parent:{k}": v for k, v in document.get("category_parents", {}).items()},
+            **{f"category_color:{k}": v for k, v in document["settings"].get("category_colors", {}).items() if k in document["categories"]},
             **{f"entry:{k}": v for k, v in document["entries"].items()},
             **{f"entry:{k}": {"purged_at": v} for k, v in document["tombstones"].items()}}
 
@@ -97,6 +102,15 @@ def seed(document, actor):
         result["registers"][key] = {f"{actor}:{counter}": deepcopy(value)}
         result["vector"][actor] = counter
     return validate(result)
+
+
+def migrate_category_colors(document, actor):
+    """Publish pre-update local colors once; a null register is an observed reset."""
+    state = document["sync"]["state"]
+    for cid, color in document["settings"].get("category_colors", {}).items():
+        key = f"category_color:{cid}"
+        if cid in document["categories"] and key not in state["registers"]:
+            write(state, actor, key, color)
 
 
 def track(before, after, actor):
@@ -181,6 +195,18 @@ def project(document, state):
                 result["tombstones"][eid] = value["purged_at"]
             else:
                 result["entries"][eid] = deepcopy(value)
+    colors = {cid: color for cid, color in document["settings"].get("category_colors", {}).items() if cid in result["categories"]}
+    for key, variants in state["registers"].items():
+        kind, cid = key.split(":")
+        if kind != "category_color" or cid not in result["categories"] or is_conflicted(variants):
+            continue
+        color = next(iter(variants.values()))
+        if color is None:
+            colors.pop(cid, None)
+        else:
+            colors[cid] = color
+    if colors or "category_colors" in result["settings"]:
+        result["settings"]["category_colors"] = colors
     for record in result["entries"].values():
         if record["category"] not in result["categories"]:
             record["category"] = None

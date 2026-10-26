@@ -363,6 +363,20 @@ try:
     click('[data-action="close-modal"]')
     js("HTMLAnchorElement.prototype.click=window.qaSettingsOriginalClick")
     results.append('import-without-file-handle-settings-and-theme-do-not-download-explicit-export-works')
+    click('[data-action="add-category"]')
+    fill('#category-name', 'Drive colors')
+    fill('#category-color', '#123456')
+    submit('#category-form')
+    wait("!document.querySelector('#modal').open")
+    color_root = js("document.querySelector('[data-category-depth=\"0\"] [data-action=manage-category]').dataset.id")
+    click(f'[data-action="manage-category"][data-id="{color_root}"]')
+    click('[data-action="add-subcategory"]')
+    fill('#category-name', 'Drive child colors')
+    fill('#category-color', '#abcdef')
+    submit('#category-form')
+    wait("!document.querySelector('#modal').open")
+    color_child = js("document.querySelector('[data-category-depth=\"1\"] [data-action=manage-category]').dataset.id")
+    results.append('category-and-subcategory-custom-colors-before-drive-sync')
     js(r"""window.qaFiles=new Map(); window.qaSerial=0; window.qaModified=0; window.qaOffline=false;
     window.google={accounts:{oauth2:{hasGrantedAllScopes:()=>true,initTokenClient:config=>{window.qaClientId=config.client_id;return {requestAccessToken:()=>{window.qaGoogleAuths=(window.qaGoogleAuths||0)+1;setTimeout(()=>config.callback({access_token:'QA-TOKEN',expires_in:3600}),0)}}}}}};
     window.fetch=async(url,options)=>{
@@ -520,6 +534,8 @@ try:
     click('[data-action="drive-settings"]')
     wait("Boolean(document.querySelector('[data-action=drive-list]'))")
     assert js("!document.querySelector('#google-connect') && window.qaGoogleAuths===1")
+    # Reopen a wire version, not a full checkpoint containing local settings.
+    js("for(const [id,file] of window.qaFiles)if(file.appProperties?.pm_checkpoint)window.qaFiles.delete(id)")
     click('[data-action="drive-list"]')
     wait("Boolean(document.querySelector('[data-action=drive-open]'))")
     click('[data-action="drive-open"]')
@@ -530,6 +546,10 @@ try:
     click('.record')
     wait("document.querySelector('#entry-note')?.value==='OFFLINE-LOCAL-INPUT'",30)
     results.append('simulated-drive-reopen-with-master-and-compatible-versions')
+    assert js(f"document.querySelector('[data-category-id=\"{color_root}\"] .category-dot').dataset.categoryColor === '#123456'")
+    assert js(f"document.querySelector('[data-category-id=\"{color_child}\"] .category-dot').dataset.categoryColor === '#abcdef'")
+    assert js(f"getComputedStyle(document.querySelector('[data-category-id=\"{color_child}\"] .category-dot')).backgroundColor === 'rgb(171, 205, 239)'")
+    results.append('wire-only-drive-reopen-restores-category-and-subcategory-colors')
     for title in ['VISIBLE-TRASH-FIXTURE', 'HIDDEN-TRASH-FIXTURE']:
         click('[data-action="new-entry"]')
         fill('#entry-title', title)

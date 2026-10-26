@@ -90,11 +90,13 @@ class SyncEngine:
 
     def initialize(self):
         self._require()
+        doc = deepcopy(self.session.document)
         if self.session.document["sync"] is None:
-            doc = deepcopy(self.session.document)
             doc["sync"] = {"state": sync_state.seed(doc, self.session.actor), "pending": None,
                            "published": None, "seen": {}}
-            self._save(doc)
+        else:
+            sync_state.migrate_category_colors(doc, self.session.actor)
+        self._save(doc)
 
     def prepare(self, remote):
         """Consume a complete bounded listing. Persist merge + immutable queue before I/O."""

@@ -34,12 +34,23 @@ export function merge(left, right) {
 }
 export function seed(doc, actor) {
   const shared = { ...Object.fromEntries(Object.entries(doc.category_parents || {}).map(([id,v]) => ['category_parent:' + id, v])), ...Object.fromEntries(Object.entries(doc.categories).map(([id, v]) => ['category:' + id, v])),
+    ...Object.fromEntries(Object.entries(doc.settings.category_colors || {}).filter(([id]) => Object.hasOwn(doc.categories, id)).map(([id, v]) => ['category_color:' + id, v])),
     ...Object.fromEntries(Object.entries(doc.entries).map(([id, v]) => ['entry:' + id, v])),
     ...Object.fromEntries(Object.entries(doc.tombstones).map(([id, v]) => ['entry:' + id, { purged_at: v }])) };
   const state = { vector: {}, registers: {} }; let count = 0;
   for (const key of Object.keys(shared).sort()) state.registers[key] = { [actor + ':' + (++count)]: clone(shared[key]) };
   if (count) state.vector[actor] = count;
   return validateState(state);
+}
+export function migrateCategoryColors(doc, actor) {
+  const state = doc.sync.state;
+  for (const [id, color] of Object.entries(doc.settings.category_colors || {})) {
+    const key = 'category_color:' + id;
+    if (!Object.hasOwn(doc.categories, id) || Object.hasOwn(state.registers, key)) continue;
+    const count = (state.vector[actor] || 0) + 1;
+    state.vector[actor] = count;
+    state.registers[key] = { [actor + ':' + count]: color };
+  }
 }
 export function project(document, state) {
   const doc = clone(document); doc.categories = {}; doc.category_parents = {}; doc.entries = {}; doc.tombstones = {};
@@ -60,6 +71,14 @@ export function project(document, state) {
     } else if (Object.hasOwn(value, 'purged_at')) doc.tombstones[id] = value.purged_at;
     else doc.entries[id] = clone(value);
   }
+  const colors = Object.fromEntries(Object.entries(document.settings.category_colors || {}).filter(([id]) => Object.hasOwn(doc.categories, id)));
+  for (const [key, variants] of Object.entries(state.registers)) {
+    const [kind, id] = key.split(':');
+    if (kind !== 'category_color' || !Object.hasOwn(doc.categories, id) || conflicted(variants)) continue;
+    const color = Object.values(variants)[0];
+    if (color === null) delete colors[id]; else colors[id] = color;
+  }
+  if (Object.keys(colors).length || Object.hasOwn(doc.settings, 'category_colors')) doc.settings.category_colors = colors;
   for (const entry of Object.values(doc.entries)) if (!Object.hasOwn(doc.categories, entry.category)) entry.category = null;
   doc.sync.state = clone(state); normalizeParents(doc); return validateDocument(doc);
 }
@@ -73,6 +92,7 @@ export async function prepare(access, document, actor, remote) {
   if (!Array.isArray(remote) || remote.length > 1000 || remote.reduce((n, v) => n + v.blob.length, 0) > 64 * 1024 * 1024) throw new Error('Облачная история превышает безопасный предел.');
   let doc = clone(document);
   if (!doc.sync) doc.sync = { state: seed(doc, actor), pending: null, published: null, seen: {} };
+  else migrateCategoryColors(doc, actor);
   const meta = doc.sync;
   if (meta.pending && !same(inspect(unb64(meta.pending.blob)).header, access.header)) {
     meta.seen[meta.pending.id] = { digest: await digest(unb64(meta.pending.blob)), vector: clone(meta.state.vector) }; meta.pending = null;
