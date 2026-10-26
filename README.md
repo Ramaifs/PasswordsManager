@@ -1,24 +1,24 @@
 # Менеджер паролей
 
-Настольная реализация 0.35 на Python/PySide6 для Windows x64 и отдельная первая [веб-версия](docs/web.md). В Windows есть локальное зашифрованное хранилище, русский GUI, импорт/экспорт, резервные состояния, восстановление и код синхронизации с Google Drive: причинные версии, очередь, конфликты, OAuth/DPAPI. Самостоятельный EXE собран и проверен в offscreen-режиме. OAuth-клиент настроен; реальный вход Google ещё не проверен. Веб-версия начинает с создания хранилища в стиле Obsidian и совместима по файлам PMVAULT. До внешней/ручной приёмки используйте вымышленные данные.
+Менеджер паролей для Windows x64 на Python и PySide6. Хранит записи в зашифрованном локальном хранилище и поддерживает синхронизацию через Google Drive. Отдельная [веб-версия](web/password-manager/README.md) работает с файлами того же формата PMVAULT.
 
-Готовые версии 0.35: [PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordsManager.exe) и [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordManager-0.35-portable.zip). [Изменения и проверки](docs/release-0.35.md).
+Возможности:
 
-**Лицензия собственного кода: All Rights Reserved (ARR).** Публичный доступ к репозиторию не предоставляет разрешение изменять или распространять собственный код проекта. [Условия](LICENSE.txt); [сторонние компоненты](THIRD_PARTY_NOTICES.md).
+- Записи с отдельными полями сайта, логина, почты, телефона, пароля и заметки.
+- Вложенные категории, поиск, светлая и тёмная темы.
+- Генератор паролей, корзина, импорт JSON и зашифрованный экспорт.
+- Мастер-пароль, ключ восстановления, автоматическая блокировка и восемь резервных состояний.
+- Синхронизация с сохранением конфликтующих версий и работа без интернета.
 
-Репозиторий: [Ramaifs/PasswordsManager](https://github.com/Ramaifs/PasswordsManager). В приложении есть проверка новых стабильных релизов; установка обновления выполняется пользователем.
+## Установка
 
-## Запуск
+Версия 0.35: [установщик PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordsManager.exe) или [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordManager-0.35-portable.zip). В переносимой версии запустите `PasswordManager.exe` рядом с каталогом `_internal`. Python для готовой сборки не нужен.
 
-Готовая переносимая сборка: распакуйте ZIP из `releases` и запустите `PasswordManager.exe` рядом с `_internal`. Python не требуется. [Инструкция пользователя](USER_GUIDE.md), [текущий протокол](docs/implementation-v0.2.md), [настройка Google](docs/google-setup.md).
+Данные хранятся отдельно от программы: `%LOCALAPPDATA%\PersonalPasswordManager`. При создании хранилища сохраните ключ восстановления отдельно. Подробности — в [инструкции пользователя](USER_GUIDE.md).
 
-После подготовки Python-окружения ниже запуск из исходников:
+## Разработка
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\run.ps1
-```
-
-Новое окружение (Python 3.14 x64):
+Требуется Python 3.14 x64:
 
 ```powershell
 py -3.14 -m venv .venv
@@ -27,33 +27,27 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\password-manager.exe
 ```
 
-Данные находятся в `%LOCALAPPDATA%\PersonalPasswordManager`, отдельно от программы. При создании подтвердите мастер-пароль и сохранение отдельно показанного ключа восстановления. Пароль и ключ автоматически на диск не записываются. Один каталог одновременно открывает один экземпляр.
-
-Импорт: «Импорт JSON» → предпросмотр → подтверждение. В [examples/legacy-demo.json](examples/legacy-demo.json) только вымышленные данные. Неизвестные поля и неверные типы отклоняются целиком; источник не изменяется.
-
-Экспорт — зашифрованный `.pmvault`. На новом компьютере его можно открыть при первоначальной настройке кнопкой «Открыть зашифрованный экспорт», введя соответствующий мастер-пароль. Объединение экспорта с существующим хранилищем пока отсутствует. Смена секретов не меняет ранее экспортированные файлы.
-
-«Резервные копии» показывает количество добавленных, удалённых и изменённых записей перед восстановлением. При повреждении актуального файла доступно восстановление читающейся копии на экране блокировки; исходные зашифрованные файлы сохраняются в `damaged-*`. Эти исходники не входят в восемь управляемых состояний и автоматически не обновляются при смене секретов.
-
-## Проверки
+Проверки:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q --junitxml=artifacts/tests.xml
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-GUI проверяется через Qt offscreen; буфер обмена подменён фикстурой. Собранный EXE проверен отдельно с очищенным PATH и зависимостями внутри поставки, без прав администратора. Это не чистая VM, реальный буфер Windows, блокировка сеанса, сон или настоящий Drive. Подробности: [текущий протокол](docs/implementation-v0.2.md), [историческая 0.1](docs/implementation.md), [формат](docs/vault-format.md), [синхронизация](docs/sync-protocol.md).
+Сборка: `scripts/build.py`. Проверка собранного приложения: `scripts/check_bundle.py`. Подготовка лицензий и архива: `scripts/collect_licenses.py` и `scripts/package_release.py`. Полная локальная проверка: `scripts/verify.py`.
 
-Повторяемая проверка и хеши: `.\.venv\Scripts\python.exe scripts\verify.py`. Сборка: `scripts/build.py`, проверочный запуск сборки: `scripts/check_bundle.py`, лицензии/исходники библиотек: `scripts/collect_licenses.py`, архив: `scripts/package_release.py`. Последние два сценария не публикуют и не устанавливают программу; сбор исходников LGPL-библиотек читает официальные серверы Qt.
+Автотесты используют Qt offscreen и имитацию Drive. Реальный вход Google, обмен между двумя компьютерами, сон и блокировка Windows требуют отдельной проверки. Независимый аудит безопасности не проводился; для испытаний используйте вымышленные данные. [Результаты и ограничения](docs/verification.md).
 
-## Документы
+## Документация
 
-- [Согласованный план](PLAN.md).
-- [История согласования](docs/design-session.md).
-- [Словарь](GLOSSARY.md).
-- [Проверка исходного репозитория](docs/baseline.md).
-- [Матрица приёмки](docs/verification.md).
+- [Инструкция пользователя](USER_GUIDE.md).
+- [Требования](PLAN.md) и [термины](GLOSSARY.md).
+- [Формат хранилища](docs/vault-format.md) и [протокол синхронизации](docs/sync-protocol.md).
+- [Настройка Google OAuth](docs/google-setup.md).
+- [Веб-версия](docs/web.md) и [размещение на Cloudflare](deployment/cloudflare-pages/README.md).
 - [Архитектурные решения](docs/adr/0004-pyside6-arr.md).
-- [История изменений](CHANGELOG.md).
+- [История изменений](CHANGELOG.md) и [проверки версии 0.35](docs/release-0.35.md).
 
-Исходный проект: [Ramaifs/Passwords-Manager](https://github.com/Ramaifs/Passwords-Manager), проверенный commit `eab2103453ddca4e3dadf2998130bddca544eb76`. Новый код написан самостоятельно; файлы исходного проекта не копировались. [Условия собственного кода](LICENSE.txt), [сторонние уведомления](THIRD_PARTY_NOTICES.md), [отчёт](docs/project-report.md), [сценарий презентации](docs/presentation.md). PPTX пока не экспортирован из-за недоступности требуемого presentation runtime.
+Исходный консольный проект: [Ramaifs/Passwords-Manager](https://github.com/Ramaifs/Passwords-Manager). Его JSON-формат поддерживается при импорте; пример с вымышленными данными — [legacy-demo.json](examples/legacy-demo.json).
+
+Собственный код распространяется на условиях [All Rights Reserved](LICENSE.txt). Установка и использование готовой программы бесплатны; публичный доступ к исходникам не разрешает их изменение и распространение. [Лицензии сторонних компонентов](THIRD_PARTY_NOTICES.md).

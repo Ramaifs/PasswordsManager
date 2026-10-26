@@ -19,7 +19,8 @@ for entry in entries:
     name = raw_path.decode('utf-8')
     assert metadata.split()[0] != b'160000', 'Embedded Git repository: ' + name
     assert not name.endswith(('.pmvault','.dpapi','.exe','.dll','.pyc')), name
-    assert not any(part in {'.venv','artifacts','build','releases','node_modules','.openai','.git'} for part in Path(name).parts), name
+    assert not any(part in {'.venv','artifacts','build','releases','node_modules','.git'} for part in Path(name).parts), name
+    assert not any(part.startswith('.') for part in Path(name).parts[:-1]), name
     assert name != 'src/password_manager/google-desktop.json', name
     content = command('show', ':' + name)
     assert not pattern.search(content), 'Credential-like content in ' + name

@@ -27,7 +27,7 @@ for path in sorted(source.rglob("*")):
         raise SystemExit("Refusing an asset outside the intended Site directory")
     relative = path.relative_to(source)
     if any(part.startswith(".") for part in relative.parts):
-        continue  # Sites-specific hosting metadata is not a Cloudflare asset.
+        continue  # Hidden metadata is not a deployment asset.
     if path.suffix.lower() not in {".html", ".js", ".css", ".svg", ".wasm", ".license"}:
         raise SystemExit("Unexpected asset type; inspect before uploading: " + relative.as_posix())
     files[relative.as_posix()] = path.read_bytes()
@@ -60,7 +60,7 @@ try:
     temporary.replace(target)
 finally:
     temporary.unlink(missing_ok=True)
-# Keep the previously shared local link pointing to this same current package.
+# Preserve the legacy archive filename for existing deployment workflows.
 (artifacts / "cloudflare-pages-upload.zip").write_bytes(target.read_bytes())
 
 report = {
@@ -73,9 +73,9 @@ report = {
     "uploaded": False,
     "new_hostname": None,
     "target_hostname": "password-manager-vault.masaoyhs.workers.dev",
-    "audience": "public: explicitly requested by user; Access deferred",
+    "audience": "public; optional access control via Cloudflare Access",
     "compatibility_archive": "cloudflare-pages-upload.zip",
-    "account_access": "not available: no connected provider, CLI login, or environment credentials found",
+    "account_access": "manual upload required",
     "required_before_cutover": ["upload current ZIP in existing Cloudflare Worker", "export .pmvault from the old origin", "verify actual deployment URL and HTTPS"],
     "existing_site_changed": False,
 }
