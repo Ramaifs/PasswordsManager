@@ -16,7 +16,7 @@ build.mkdir(parents=True, exist_ok=True)
 files = {p.relative_to(bundle).as_posix(): p for p in bundle.rglob('*') if p.is_file()}
 for name in ['USER_GUIDE.md', 'LICENSE.txt', 'THIRD_PARTY_NOTICES.md', 'CHANGELOG.md']:
     files[name] = root / name
-for name in ['google-setup.md', 'release-' + version + '.md']:
+for name in ['google-setup.md', 'release-' + version + '.md', 'verification-' + version + '.md']:
     files['docs/' + name] = root / 'docs' / name
 for folder, target in [('release-materials/licenses', 'licenses'), ('release-materials/library-sources', 'library-sources')]:
     for p in (root / folder).rglob('*'):

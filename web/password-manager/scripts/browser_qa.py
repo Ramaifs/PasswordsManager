@@ -350,7 +350,20 @@ try:
     click('.record')
     assert js("document.querySelector('#entry-note').value.includes('Кириллица и emoji')")
     results.append('desktop-file-import-through-real-ui-handler')
-    js(r"""window.qaFiles=new Map(); window.qaSerial=0; window.qaOffline=false;
+    js("window.qaSettingsDownloads=[];window.qaSettingsOriginalClick=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){window.qaSettingsDownloads.push(this.download)}")
+    click('[data-action="settings"]')
+    submit('#settings-form')
+    wait("!document.querySelector('#settings-form')")
+    assert js("window.qaSettingsDownloads.length === 0"), 'Settings unexpectedly downloaded an imported vault'
+    click('[data-action="theme"]')
+    assert js("window.qaSettingsDownloads.length === 0"), 'Theme unexpectedly downloaded a vault'
+    click('[data-action="settings"]')
+    click('[data-action="export"]')
+    assert js("window.qaSettingsDownloads.length === 1 && window.qaSettingsDownloads[0].endsWith('.pmvault')")
+    click('[data-action="close-modal"]')
+    js("HTMLAnchorElement.prototype.click=window.qaSettingsOriginalClick")
+    results.append('import-without-file-handle-settings-and-theme-do-not-download-explicit-export-works')
+    js(r"""window.qaFiles=new Map(); window.qaSerial=0; window.qaModified=0; window.qaOffline=false;
     window.google={accounts:{oauth2:{hasGrantedAllScopes:()=>true,initTokenClient:config=>{window.qaClientId=config.client_id;return {requestAccessToken:()=>{window.qaGoogleAuths=(window.qaGoogleAuths||0)+1;setTimeout(()=>config.callback({access_token:'QA-TOKEN',expires_in:3600}),0)}}}}}};
     window.fetch=async(url,options)=>{
       if(window.qaNetworkDelay)await new Promise(resolve=>setTimeout(resolve,window.qaNetworkDelay));
@@ -364,7 +377,7 @@ try:
         if(options.body instanceof Blob){const boundary=options.headers['Content-Type'].split('boundary=')[1],parts=(await options.body.text()).split('--'+boundary);m=JSON.parse(parts[1].split('\r\n\r\n')[1].trim());blob=new TextEncoder().encode(parts[2].split('\r\n\r\n')[1].slice(0,-2));}
         else {m=JSON.parse(new TextDecoder().decode(options.body));blob=new Uint8Array();}
         if(window.qaFailPublish&&m.appProperties.pm_version)throw new Error('QA publish interrupted');
-        window.qaFiles.set(m.id,{...m,blob,size:String(blob.length),version:'1'});return reply({id:m.id});
+        window.qaFiles.set(m.id,{...m,blob,size:String(blob.length),version:'1',modifiedTime:new Date(1700000000000+(++window.qaModified)).toISOString()});return reply({id:m.id});
       }
       if(options.method==='DELETE'){window.qaFiles.delete(u.pathname.split('/').pop());return reply(new Uint8Array())}
       if(!u.searchParams.get('alt')&&window.qaFiles.has(u.pathname.split('/').pop())){const {blob,...metadata}=window.qaFiles.get(u.pathname.split('/').pop());return reply(metadata)}

@@ -9,21 +9,106 @@ from password_manager.storage import Store
 
 PASSWORD = "GUI fictional password phrase"
 
+
+@pytest.mark.parametrize('mode', ['normal', 'maximized', 'fullscreen'])
+def test_window_mode_survives_minimize_tray_and_restart(window, app, monkeypatch, mode):
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QSystemTrayIcon
+    from PySide6.QtTest import QTest
+    from password_manager.preferences import Preferences
+    window.show_saved_window()
+    getattr(window, {'normal': 'showNormal', 'maximized': 'showMaximized', 'fullscreen': 'showFullScreen'}[mode])()
+    QTest.qWait(250)
+    assert window._window_mode == mode
+    window.showMinimized()
+    app.processEvents()
+    window.save_window_mode()
+    assert Preferences(window.session.store.root).window_mode == mode
+    window.preferences.close_action = 'tray'
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', lambda: True)
+    monkeypatch.setattr(window, 'ensure_tray', lambda: setattr(window, 'tray', SimpleNamespace(show=lambda: None, hide=lambda: None)))
+    window.close()
+    assert not window.isVisible()
+    window.restore_from_tray()
+    app.processEvents()
+    assert not window.isMinimized()
+    assert window.isFullScreen() == (mode == 'fullscreen')
+    assert window.isMaximized() == (mode == 'maximized')
+    window.quit_application()
+    restored = Window(Store(window.session.store.root))
+    restored.updates.scheduled = True
+    try:
+        restored.show_saved_window()
+        QTest.qWait(250)
+        assert restored._window_mode == mode
+        assert restored.isFullScreen() == (mode == 'fullscreen')
+        assert restored.isMaximized() == (mode == 'maximized')
+    finally:
+        restored.quit_application()
+
+
+def test_close_dialog_enter_defaults_to_tray(window, monkeypatch):
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton, QSystemTrayIcon
+    monkeypatch.setattr(QSystemTrayIcon, 'isSystemTrayAvailable', lambda: True)
+    def enter():
+        dialog = QApplication.activeModalWidget()
+        buttons = dialog.findChildren(QPushButton)
+        assert [b.text() for b in buttons] == ['В трей', 'Закрыть', 'Отмена']
+        assert [b.text() for b in buttons if b.isDefault()] == ['В трей']
+        assert buttons[0].objectName() == 'primary'
+        QTest.keyClick(dialog, Qt.Key.Key_Return)
+    QTimer.singleShot(0, enter)
+    assert window.choose_close_action() == ('tray', False)
+
+
+def test_number_input_and_navigation_icons(window, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QSpinBox
+    from password_manager import model
+    def inspect():
+        dialog = QApplication.activeModalWidget()
+        numbers = dialog.findChildren(QSpinBox)
+        assert len(numbers) == 2
+        assert all(n.lineEdit().textMargins().left() == 11 for n in numbers)
+        dialog.reject()
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(0, inspect)
+    window.settings()
+    for index in [0, 1, window.categories.count() - 1]:
+        assert not window.categories.item(index).icon().isNull()
+    heading = window.categories.item(2)
+    assert heading.text() == 'Категории'
+    assert not (heading.flags() & Qt.ItemFlag.ItemIsSelectable)
+    cid = window.session.mutate(lambda doc: model.category(doc, 'Work'))
+    window.refresh_categories()
+    window.record_category.setCurrentIndex(window.record_category.findData(cid))
+    window.theme_button.click()
+    first = window.session.document['settings']['theme']
+    window.theme_button.click()
+    assert window.session.document['settings']['theme'] != first
+    assert window.record_category.currentData() == cid
+    window.session.mutate(lambda doc: model.save_entry(doc, {'title': 'Почта'}))
+    window.categories.setCurrentRow(1)
+    window.refresh_entries()
+    assert not window.entries.item(0).icon().isNull()
+
 def test_sidebar_context_actions_and_nested_categories(window):
     from password_manager import model
     from PySide6.QtWidgets import QPushButton, QToolButton
     root = window.session.mutate(lambda doc: model.category(doc, 'Work'))
     child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
     window.refresh_categories()
-    assert window.categories.item(3).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
-    assert '• ' in window.categories.item(3).text()
+    assert window.categories.item(4).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
+    assert '• ' in window.categories.item(4).text()
     assert [action.text() for action in window.category_menu().actions()] == ['Создать категорию']
     labels = [action.text() for action in window.category_menu(root).actions()]
     assert all(label in labels for label in ['Создать подкатегорию','Переименовать','Поменять цвет','Удалить категорию'])
     sidebar = window.categories.parentWidget()
     buttons = [button.text() for button in sidebar.findChildren(QPushButton)]
     assert buttons == ['Настройки']
-    assert not sidebar.findChildren(QToolButton)
+    assert [b.objectName() for b in sidebar.findChildren(QToolButton)] == ['themeToggle']
 
 
 def test_all_entries_category_color_caption_and_named_export(window):
@@ -38,7 +123,7 @@ def test_all_entries_category_color_caption_and_named_export(window):
     window.refresh_entries()
     item = window.entries.item(0)
     assert item.foreground().color().name() == '#24aabb'
-    assert [label.text() for label in window.entries.itemWidget(item).findChildren(QLabel)] == ['Почта', 'Работа']
+    assert [label.text() for label in window.entries.itemWidget(item).findChildren(QLabel)] == ['', 'Почта', 'Работа']
     window.show()
     QApplication.processEvents()
     assert all(label.height() >= label.fontMetrics().height() for label in window.entries.itemWidget(item).findChildren(QLabel))
@@ -117,7 +202,7 @@ def test_close_choice_dialog_and_full_exit_saved(window, monkeypatch):
         box = dialog.findChild(QCheckBox, 'rememberCloseAction')
         assert not box.isChecked()
         box.setChecked(True)
-        next(b for b in dialog.findChildren(QPushButton) if b.text() == 'Полностью').click()
+        next(b for b in dialog.findChildren(QPushButton) if b.text() == 'Закрыть').click()
     QTimer.singleShot(0, choose)
     window.close()
     assert window.session.store._lock is None

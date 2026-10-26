@@ -81,3 +81,12 @@ https://password-manager-vault.masaoyhs.workers.dev/api/google/config
 Локальные тесты: из `web/password-manager` выполните `npm test`. Они проверяют обмен кода, продление, cookie, шифрование KV, отключение, подмену origin, повреждённую сессию и ошибки провайдера. Запросы Google в тестах подменены; реальная авторизация и размещение проверяются отдельно.
 
 Документация: [Google code model](https://developers.google.com/identity/oauth2/web/guides/use-code-model), [Cloudflare secrets](https://developers.cloudflare.com/workers/configuration/secrets/), [Workers KV](https://developers.cloudflare.com/kv/).
+
+## Диагностика подключения
+
+- `oauth_invalid_client`: GOOGLE_CLIENT_SECRET должен содержать полное значение Client secret того же Web application, чей Client ID указан в Worker и oauth-config.js. Секрет Desktop-клиента не подходит. Используйте сохранённый JSON (`web.client_secret`) или создайте новый секрет у этого Web-клиента. Значение храните в Cloudflare Secrets.
+- `session_key_invalid`: SESSION_ENCRYPTION_KEY должен декодироваться из base64 в 32 байта.
+- `oauth_invalid_grant`: повторите вход, код мог истечь или уже использоваться.
+- `session_storage_unavailable`: проверьте binding GOOGLE_SESSIONS и доступ к KV.
+
+Worker использует redirect: manual: перенаправления OAuth-запроса запрещены, чтобы Client secret не пересылался другому адресу. Режим error не поддерживается runtime Worker. Содержимое ошибок Google и секреты не журналируются.

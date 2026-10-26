@@ -33,6 +33,11 @@ def stylesheet(dark=True):
         QPushButton#primary {{ background: #8864cb; color: #ffffff; font-weight: 600; }}
         QPushButton#primary:hover {{ background: #9976da; }}
         QPushButton#primary:disabled {{ background: {line}; color: {muted}; }}
+        QDialog#closeChoice QPushButton {{ background: transparent; border: 1px solid {line}; }}
+        QDialog#closeChoice QPushButton:hover {{ background: {hover}; border-color: {accent}; }}
+        QDialog#closeChoice QPushButton#primary {{ background: #8864cb; color: #ffffff; border-color: #8864cb; }}
+        QDialog#closeChoice QPushButton#primary:hover {{ background: #9976da; border-color: #9976da; }}
+        QDialog#closeChoice QPushButton#primary:disabled {{ background: {line}; color: {muted}; border-color: {line}; }}
         QPushButton#danger {{ color: {"#ed9da8" if dark else "#ad354b"}; }}
         QListWidget {{ background: transparent; border: none; outline: none; padding: 4px; }}
         QListWidget::item {{ padding: 13px 11px; border-radius: 7px; margin: 2px 0; }}

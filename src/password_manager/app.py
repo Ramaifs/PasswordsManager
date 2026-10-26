@@ -7,7 +7,7 @@ import sys
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QAbstractNativeEventFilter, QTranslator, QLibraryInfo, QSize
-from PySide6.QtGui import QGuiApplication, QColor
+from PySide6.QtGui import QGuiApplication, QColor, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QFormLayout, QLineEdit, QTextEdit, QPushButton, QListWidget, QListWidgetItem, QComboBox,
     QSplitter, QLabel, QMessageBox, QInputDialog, QFileDialog, QDialog, QSpinBox, QCheckBox,
@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QSizePolicy, QColorDialog, QFrame, QSystemTrayIcon)
 from .theme import stylesheet
 from .category_list import CategoryList, HAS_CHILDREN, COLLAPSED
-from .icons import application_icon
+from .icons import application_icon, navigation_icon, entry_icon
 from .preferences import Preferences
 
 from . import model
@@ -36,6 +36,12 @@ def button(text, callback, layout):
     widget.clicked.connect(callback)
     layout.addWidget(widget)
     return widget
+
+
+class NumberInput(QSpinBox):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lineEdit().setTextMargins(11, 0, 0, 0)
 
 
 class WindowsEvents(QAbstractNativeEventFilter):
@@ -59,6 +65,12 @@ class Window(QMainWindow):
         super().__init__()
         self.session = Session(store)
         self.preferences = Preferences(store.root)
+        self._window_mode = self.preferences.window_mode
+        self._restoring_window = False
+        self._window_preference_error = False
+        self.window_state_timer = QTimer(self)
+        self.window_state_timer.setSingleShot(True)
+        self.window_state_timer.timeout.connect(self.save_window_mode)
         self.collapsed_categories = set()
         self.tray = None
         self._pending_close_action = None
@@ -120,6 +132,47 @@ class Window(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.position_toast()
+
+    def remember_window_mode(self):
+        if not self.isVisible() or self.isMinimized() or self._restoring_window:
+            return
+        self._window_mode = "fullscreen" if self.isFullScreen() else "maximized" if self.isMaximized() else "normal"
+
+    def save_window_mode(self):
+        self.window_state_timer.stop()
+        if self.preferences.window_mode == self._window_mode:
+            return
+        try:
+            self.preferences.save_window_mode(self._window_mode)
+            self._window_preference_error = False
+        except OSError:
+            if self.isVisible() and not self._window_preference_error:
+                self.toast("Не удалось сохранить состояние окна. Проверьте доступ к папке приложения.")
+            self._window_preference_error = True
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "window_state_timer") and self.isVisible() and not self.isMinimized() and not self._restoring_window:
+            self.remember_window_mode()
+            self.window_state_timer.start(200)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, "window_state_timer") and not self._restoring_window:
+            self.remember_window_mode()
+            self.window_state_timer.start(200)
+
+    def show_saved_window(self):
+        self._restoring_window = True
+        try:
+            if self._window_mode == "fullscreen":
+                self.showFullScreen()
+            elif self._window_mode == "maximized":
+                self.showMaximized()
+            else:
+                self.showNormal()
+        finally:
+            self._restoring_window = False
 
     def error(self, exception):
         message = str(exception) if isinstance(exception, VaultError) else "Операция не выполнена. Проверьте доступ к файлам и свободное место."
@@ -368,6 +421,12 @@ class Window(QMainWindow):
         self.categories.customContextMenuRequested.connect(self.category_context_menu)
         ll.addWidget(self.categories)
         button("Настройки", lambda: self.safe(self.settings), ll)
+        self.theme_button = QToolButton()
+        self.theme_button.setObjectName("themeToggle")
+        self.theme_button.setAccessibleName("Переключить тему")
+        self.theme_button.setToolTip("Переключить тему")
+        self.theme_button.clicked.connect(lambda: self.safe(self.toggle_theme))
+        ll.addWidget(self.theme_button, 0, Qt.AlignmentFlag.AlignLeft)
         version = QLabel(f"Windows  ·  {__version__}")
         version.setObjectName("caption")
         ll.addWidget(version)
@@ -560,6 +619,9 @@ class Window(QMainWindow):
 
     def refresh_categories(self, selected=None):
         self.loading = True
+        theme = self.session.document["settings"]["theme"]
+        dark = theme == "dark" or (theme == "system" and QGuiApplication.styleHints().colorScheme() != Qt.ColorScheme.Light)
+        icon_color = "#a09cb0" if dark else "#706a7c"
         current = self.categories.currentItem()
         selected = selected if selected is not None else current.data(Qt.ItemDataRole.UserRole) if current else "all"
         self.categories.blockSignals(True)
@@ -575,8 +637,16 @@ class Window(QMainWindow):
             if parents.get(cid) in self.collapsed_categories or parents.get(cid) in hidden:
                 hidden.add(cid)
         for name, data in [("Все записи", "all"), ("Без категории", None), *[(('    ' * depth + '• ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
+            if self.categories.count() == 2:
+                heading = QListWidgetItem("Категории")
+                heading.setData(Qt.ItemDataRole.UserRole, "category-heading")
+                heading.setFlags(Qt.ItemFlag.NoItemFlags)
+                heading.setForeground(QColor(icon_color))
+                self.categories.addItem(heading)
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, data)
+            if data in ("all", None, "trash"):
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "trash": "trash"}[data], icon_color))
             if data in self.session.document["categories"]:
                 item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, "#9b87f5")))
                 item.setData(HAS_CHILDREN, data in has_children)
@@ -638,6 +708,8 @@ class Window(QMainWindow):
             cid = entry["category"]
             category_name = self.session.document["categories"].get(cid, "Без категории")
             item = QListWidgetItem(entry["title"])
+            badge = entry_icon(entry["title"])
+            item.setIcon(badge)
             color = self.session.document["settings"].get("category_colors", {}).get(cid, "#9b87f5") if cid else None
             if category == "all" and color:
                 item.setForeground(QColor(color))
@@ -647,8 +719,15 @@ class Window(QMainWindow):
             if category == "all":
                 row = QWidget()
                 row.setStyleSheet("background: transparent;")
-                labels = QVBoxLayout(row)
-                labels.setContentsMargins(10, 7, 10, 7)
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(10, 7, 10, 7)
+                mark = QLabel()
+                mark.setPixmap(badge.pixmap(28, 28))
+                mark.setFixedSize(28, 28)
+                mark.setAccessibleName("Значок записи")
+                row_layout.addWidget(mark)
+                labels = QVBoxLayout()
+                row_layout.addLayout(labels, 1)
                 labels.setSpacing(3)
                 title = QLabel(entry["title"])
                 title.setTextFormat(Qt.TextFormat.PlainText)
@@ -664,6 +743,7 @@ class Window(QMainWindow):
                 row.ensurePolished()
                 item.setSizeHint(row.sizeHint() + QSize(0, 6))
                 item.setText("")
+                item.setIcon(QIcon())
                 item.setData(Qt.ItemDataRole.AccessibleTextRole, entry["title"])
                 self.entries.setItemWidget(item, row)
         self.entries.blockSignals(False)
@@ -883,7 +963,7 @@ class Window(QMainWindow):
         dialog.setWindowTitle("Генератор паролей")
         form = QFormLayout(dialog)
         saved = self.generator_options
-        length, count = QSpinBox(), QSpinBox()
+        length, count = NumberInput(), NumberInput()
         length.setRange(8, 128)
         length.setValue(saved["length"])
         count.setRange(1, 100)
@@ -1100,7 +1180,7 @@ class Window(QMainWindow):
         for label, key in [("Системная", "system"), ("Светлая", "light"), ("Тёмная", "dark")]:
             theme.addItem(label, key)
         theme.setCurrentIndex(theme.findData(values["theme"]))
-        minutes = QSpinBox()
+        minutes = NumberInput()
         minutes.setRange(1, 1440)
         minutes.setValue(values["lock_minutes"])
         general.addRow("Тема", theme)
@@ -1135,7 +1215,7 @@ class Window(QMainWindow):
         auto = QCheckBox("Автоматическая синхронизация Google Drive")
         auto.setChecked(bool(values.get("sync_minutes", 5)))
         layout.addWidget(auto)
-        sync = QSpinBox()
+        sync = NumberInput()
         sync.setRange(1, 1440)
         sync.setValue(values.get("sync_minutes", 5) or 5)
         sync.setEnabled(auto.isChecked())
@@ -1214,11 +1294,26 @@ class Window(QMainWindow):
             if self.session.store.cleanup():
                 QMessageBox.warning(self, "Очистка не завершена", "Новый доступ записан, но часть старых зашифрованных файлов пока не удалена. Старый доступ к ним может сохраняться. Повторите очистку после устранения ошибки диска.")
 
+    def toggle_theme(self):
+        dark = self._dark_theme
+        self.session.mutate(lambda doc: doc["settings"].update(theme="light" if dark else "dark"))
+        self.apply_theme()
+
     def apply_theme(self):
         theme = self.session.document["settings"]["theme"]
         QGuiApplication.styleHints().setColorScheme({"system": Qt.ColorScheme.Unknown, "light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}[theme])
         dark = theme == "dark" or (theme == "system" and QGuiApplication.styleHints().colorScheme() != Qt.ColorScheme.Light)
+        self._dark_theme = dark
         self.setStyleSheet(stylesheet(dark))
+        self.theme_button.setIcon(navigation_icon("sun" if dark else "moon", "#a09cb0" if dark else "#706a7c"))
+        muted = "#a09cb0" if dark else "#706a7c"
+        for index in range(self.categories.count()):
+            item = self.categories.item(index)
+            kind = item.data(Qt.ItemDataRole.UserRole)
+            if kind in ("all", None, "trash"):
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "trash": "trash"}[kind], muted))
+            elif kind == "category-heading":
+                item.setForeground(QColor(muted))
 
     def choose_close_action(self):
         dialog = QDialog(self)
@@ -1241,8 +1336,14 @@ class Window(QMainWindow):
             dialog.accept()
         tray = button("В трей", lambda: select("tray"), controls)
         tray.setEnabled(tray_available)
-        button("Полностью", lambda: select("quit"), controls).setObjectName("primary")
-        button("Отмена", dialog.reject, controls)
+        tray.setObjectName("primary")
+        tray.setAutoDefault(False)
+        tray.setDefault(tray_available)
+        close = button("Закрыть", lambda: select("quit"), controls)
+        close.setAutoDefault(False)
+        cancel = button("Отмена", dialog.reject, controls)
+        cancel.setAutoDefault(False)
+        cancel.setDefault(not tray_available)
         layout.addLayout(controls)
         self._asking_close = True
         try:
@@ -1265,7 +1366,7 @@ class Window(QMainWindow):
         self.tray.activated.connect(lambda reason: self.restore_from_tray() if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick) else None)
 
     def restore_from_tray(self):
-        self.showNormal()
+        self.show_saved_window()
         self.raise_()
         self.activateWindow()
         if self.tray is not None:
@@ -1332,12 +1433,18 @@ class Window(QMainWindow):
                 event.ignore()
                 return
             self._close_remember = False
+        self.remember_window_mode()
+        self.save_window_mode()
         if self._pending_close_action == "tray":
             self.lock_vault()
             self.ensure_tray()
             QApplication.instance().setQuitOnLastWindowClosed(False)
             self.tray.show()
-            self.hide()
+            self._restoring_window = True
+            try:
+                self.hide()
+            finally:
+                self._restoring_window = False
             self._pending_close_action = None
             event.ignore()
             return
@@ -1389,5 +1496,5 @@ def main():
     def exception_hook(kind, error, traceback):
         window.error(error)
     sys.excepthook = exception_hook
-    window.show()
+    window.show_saved_window()
     return app.exec()

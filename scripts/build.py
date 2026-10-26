@@ -47,7 +47,7 @@ for plugin in (qt / "plugins").rglob("*.dll"):
     if plugin.relative_to(qt / "plugins").as_posix() not in allowed:
         remove_owned(plugin)
 
-roots = [qt / name for name in ["QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtNetwork.pyd", "pyside6.abi3.dll"]]
+roots = [qt / name for name in ["QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtNetwork.pyd", "QtSvg.pyd", "pyside6.abi3.dll"]]
 roots.extend((qt / "plugins").rglob("*.dll"))
 needed = set()
 queue = list(roots)

@@ -63,6 +63,11 @@ if web_manifest.exists():
             assert (root/item['source']).read_bytes() == data
 for file in ['artifacts/frozen-smoke/smoke-result.json','web/password-manager/artifacts/browser/result.json']:
     assert json.loads((root/file).read_text(encoding='utf-8'))['success']
-report={'version':version,'success':True,'source_receipt_matches':True,'archives_and_hashes_valid':True,'application_and_installer_icon_frames_verified':len(expected_frames),'user_vaults_and_tokens_excluded':True,'installed':False,'website_deployed':False}
+public_check = root/'artifacts/cloudflare-public-check.json'
+public = json.loads(public_check.read_text(encoding='utf-8')) if public_check.exists() else {}
+website_verified = public.get('version') == version and public.get('current_version_verified') is True and bool(public.get('assets'))
+for name, details in public.get('assets', {}).items():
+    website_verified = website_verified and details.get('sha256') == hashlib.sha256((root/'web/password-manager/dist'/name).read_bytes()).hexdigest()
+report={'version':version,'success':True,'source_receipt_matches':True,'archives_and_hashes_valid':True,'application_and_installer_icon_frames_verified':len(expected_frames),'user_vaults_and_tokens_excluded':True,'installed':False,'website_deployed':website_verified}
 (root/'artifacts'/('release-'+version+'-audit.json')).write_text(json.dumps(report,indent=2),encoding='utf-8')
 print(json.dumps(report,indent=2))

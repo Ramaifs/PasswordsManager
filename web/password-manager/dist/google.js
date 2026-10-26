@@ -2,9 +2,28 @@
 export const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 let loading, token = null, expiry = 0, epoch = 0, cancelLogin;
 let persistent = false, serverSession = false, renewing;
+const sessionErrors = {
+  oauth_invalid_client: 'В Cloudflare указан неверный Client secret Web OAuth-клиента Google. Проверьте его соответствие Web Client ID.',
+  oauth_redirect_mismatch: 'Адрес сайта не совпадает с настройками Web OAuth-клиента Google. Проверьте разрешённый адрес и SITE_ORIGIN.',
+  oauth_invalid_grant: 'Google отклонил код входа. Закройте окно входа и подключитесь ещё раз.',
+  offline_access_missing: 'Google не выдал разрешение на сохранение входа. Нужно повторно подтвердить постоянный доступ.',
+  session_key_invalid: 'В Cloudflare неверно задан SESSION_ENCRYPTION_KEY. Нужен ключ из 32 случайных байтов в base64.',
+  google_unavailable: 'Сервер Google временно недоступен. Подключение можно повторить позже.',
+  google_network_unavailable: 'Серверу сайта не удалось связаться с Google. Повторите подключение позже.',
+  google_response_invalid: 'Google вернул некорректный ответ. Повторите подключение позже.',
+  google_exchange_unavailable: 'Не удалось обработать ответ Google на сервере сайта.',
+  request_body_unavailable: 'Сервер сайта не смог прочитать запрос подключения. Повторите вход.',
+  session_crypto_unavailable: 'Сервер сайта не смог защитить сессию Google. Проверьте настройки сервера.',
+  session_storage_unavailable: 'Сервер сайта не смог сохранить сессию Google. Проверьте доступность Cloudflare KV.'
+};
 async function sessionRequest(path, body = {}, fetcher = globalThis.fetch) {
   const response = await fetcher('/api/google/' + path, { method: 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(25000), headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }, body: JSON.stringify(body) });
-  if (!response.ok) { const error = new Error('Подключите Google заново: сессия завершена или сервер недоступен.'); error.status = response.status; throw error; }
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    const error = new Error(sessionErrors[details.error] || 'Подключите Google заново: сессия завершена или сервер недоступен.');
+    error.status = response.status; error.code = Object.hasOwn(sessionErrors, details.error) ? details.error : null;
+    throw error;
+  }
   return response.json();
 }
 function acceptToken(response) {

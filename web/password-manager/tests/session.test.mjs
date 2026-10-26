@@ -108,3 +108,29 @@ test('browser code login and a fresh page share the Worker session without anoth
     await reloaded.disconnectGoogle(); assert.equal(values.size, 0);
   } finally { globalThis.fetch = originalFetch; globalThis.google = originalGoogle; }
 });
+
+test('Google client and session-key configuration failures are specific and redact provider details', async () => {
+  const { env, request } = fixture();
+  env.OAUTH_FETCH = async () => Response.json({ error: 'invalid_client', error_description: 'SECRET-PROVIDER-CONTENT' }, { status: 401 });
+  const invalidClient = await handleSession(request('exchange', '', { code: 'CODE' }), env);
+  assert.equal(invalidClient.status, 503);
+  const clientError = await invalidClient.text();
+  assert.ok(clientError.includes('oauth_invalid_client'));
+  assert.ok(!clientError.includes('SECRET-PROVIDER'));
+  env.SESSION_ENCRYPTION_KEY = 'not-a-session-key';
+  const invalidKey = await handleSession(request('exchange', '', { code: 'CODE' }), env);
+  assert.equal(invalidKey.status, 503);
+  assert.equal((await invalidKey.json()).error, 'session_key_invalid');
+});
+
+test('Worker token exchange uses supported manual redirects and never follows credentials', async () => {
+  const { env, request } = fixture();
+  env.OAUTH_FETCH = async (url, options) => {
+    // workerd rejects redirect:error before making any HTTP request.
+    assert.equal(options.redirect, 'manual');
+    return new Response(null, { status: 302, headers: { Location: 'https://other.invalid/' } });
+  };
+  const response = await handleSession(request('exchange', '', { code: 'CODE' }), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'google_unavailable');
+});
