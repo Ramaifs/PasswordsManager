@@ -11,7 +11,7 @@ using Microsoft.Win32;
 
 static class Setup {
  const string AppName = "Password Manager";
- static string Version { get { return Assembly.GetExecutingAssembly().GetName().Version.ToString(3); } }
+ static string Version { get { return ((AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(Assembly.GetExecutingAssembly(), typeof(AssemblyInformationalVersionAttribute))).InformationalVersion; } }
  const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PersonalPasswordManager";
  static readonly string Target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "PersonalPasswordManager");
  static readonly string Shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Password Manager.lnk");

@@ -1,8 +1,8 @@
 # Менеджер паролей
 
-Настольная реализация 0.3.5 на Python/PySide6 для Windows x64 и отдельная первая [веб-версия](docs/web.md). В Windows есть локальное зашифрованное хранилище, русский GUI, импорт/экспорт, резервные состояния, восстановление и код синхронизации с Google Drive: причинные версии, очередь, конфликты, OAuth/DPAPI. Самостоятельный EXE собран и проверен в offscreen-режиме. OAuth-клиент настроен; реальный вход Google ещё не проверен. Веб-версия начинает с создания хранилища в стиле Obsidian и совместима по файлам PMVAULT. До внешней/ручной приёмки используйте вымышленные данные.
+Настольная реализация 0.35 на Python/PySide6 для Windows x64 и отдельная первая [веб-версия](docs/web.md). В Windows есть локальное зашифрованное хранилище, русский GUI, импорт/экспорт, резервные состояния, восстановление и код синхронизации с Google Drive: причинные версии, очередь, конфликты, OAuth/DPAPI. Самостоятельный EXE собран и проверен в offscreen-режиме. OAuth-клиент настроен; реальный вход Google ещё не проверен. Веб-версия начинает с создания хранилища в стиле Obsidian и совместима по файлам PMVAULT. До внешней/ручной приёмки используйте вымышленные данные.
 
-Готовые версии 0.3.5: [PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.3.5/PasswordsManager.exe) и [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.3.5/PasswordManager-0.3.5-portable.zip). [Изменения и проверки](docs/release-0.3.5.md).
+Готовые версии 0.35: [PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordsManager.exe) и [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.35/PasswordManager-0.35-portable.zip). [Изменения и проверки](docs/release-0.35.md).
 
 **Лицензия собственного кода: All Rights Reserved (ARR).** Публичный доступ к репозиторию не предоставляет разрешение изменять или распространять собственный код проекта. [Условия](LICENSE.txt); [сторонние компоненты](THIRD_PARTY_NOTICES.md).
 

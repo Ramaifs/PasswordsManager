@@ -23,3 +23,11 @@ def test_no_releases_network_errors_and_invalid_tags():
     for tag in ['v1.0.0-beta', '../bad', 'v1', None, 'v1.2.3/../../bad']:
         with pytest.raises(VaultError): version_tuple(tag)
     with pytest.raises(VaultError): latest_release(fetch=lambda *a, **k: canonical({'tag_name':'v9.0.0','prerelease':True}))
+
+def test_two_component_version_035_and_legacy_three_component_tags():
+    fetch = lambda *a, **k: canonical({'tag_name':'v0.35','draft':False,'prerelease':False})
+    assert latest_release(current='0.34',fetch=fetch)['available']
+    assert latest_release(current='0.3.4',fetch=fetch)['available']
+    assert not latest_release(current='0.35',fetch=fetch)['available']
+    assert not latest_release(current='0.36',fetch=fetch)['available']
+    assert version_tuple('0.35') == version_tuple('v0.35.0')

@@ -35,7 +35,8 @@ with zipfile.ZipFile(out / f'PasswordManager-web-{version}.zip', 'w', zipfile.ZI
         if p.is_file(): archive.write(p, p.relative_to(root / 'web/password-manager/dist').as_posix())
 compiler = Path(os.environ['WINDIR']) / 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 version_info = build / 'VersionInfo.cs'
-version_info.write_text('using System.Reflection;\n[assembly: AssemblyVersion("' + version + '.0")]\n[assembly: AssemblyFileVersion("' + version + '.0")]\n', encoding='utf-8')
+numeric_version = version + '.0' * (4 - len(version.split('.')))
+version_info.write_text('using System.Reflection;\n[assembly: AssemblyVersion("' + numeric_version + '")]\n[assembly: AssemblyFileVersion("' + numeric_version + '")]\n[assembly: AssemblyInformationalVersion("' + version + '")]\n', encoding='utf-8')
 common = [str(compiler), '/nologo', '/target:winexe', '/platform:x64', '/reference:System.Windows.Forms.dll', '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll']
 uninstall = build / 'Uninstall.exe'
 subprocess.run([*common, '/define:UNINSTALLER', '/out:' + str(uninstall), str(root / 'scripts/Setup.cs'), str(version_info)], check=True)

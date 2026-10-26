@@ -15,9 +15,10 @@ API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 
 
 def version_tuple(value):
-    if not isinstance(value, str) or not re.fullmatch(r"v?\d{1,5}\.\d{1,5}\.\d{1,5}", value):
+    if not isinstance(value, str) or not re.fullmatch(r"v?\d{1,5}\.\d{1,5}(?:\.\d{1,5})?", value):
         raise VaultError("GitHub вернул неподдерживаемый номер версии.")
-    return tuple(int(part) for part in value.removeprefix('v').split('.'))
+    parts = tuple(int(part) for part in value.removeprefix('v').split('.'))
+    return parts + (0,) if len(parts) == 2 else parts
 
 
 def latest_release(*, current=__version__, cancel=None, fetch=request):
