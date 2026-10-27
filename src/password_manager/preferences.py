@@ -27,7 +27,7 @@ class Preferences:
                     self.close_action = action
                 if isinstance(mode, str) and mode in WINDOW_MODES:
                     self.window_mode = mode
-                if value.get("entry_sort") in ("title", "updated"):
+                if value.get("entry_sort") in ("title", "updated", "category"):
                     self.entry_sort = value["entry_sort"]
                 last = value.get("last_opened_vault")
                 if isinstance(last, str) and str(uuid.UUID(last)) == last:
@@ -55,7 +55,7 @@ class Preferences:
             self._save(self.close_action, self.window_mode, value)
 
     def save_entry_sort(self, order):
-        if order not in ("title", "updated"):
+        if order not in ("title", "updated", "category"):
             raise VaultError("Неизвестный порядок сортировки записей.")
         self._save(self.close_action, self.window_mode, order=order)
 

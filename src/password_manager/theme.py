@@ -2,6 +2,7 @@
 
 
 def stylesheet(dark=True, accent_color="#8864cb"):
+    from pathlib import Path
     from PySide6.QtGui import QColor
     primary = QColor(accent_color)
     if not primary.isValid():
@@ -20,6 +21,7 @@ def stylesheet(dark=True, accent_color="#8864cb"):
     accent = mix(text, .65) if dark else primary.name()
     selected, hover = mix(bg, .26), mix(bg, .14)
     ink = "#ffffff" if primary.redF() * .299 + primary.greenF() * .587 + primary.blueF() * .114 < .6 else "#17171b"
+    checkmark = (Path(__file__).with_name("assets") / ("checkmark-light.svg" if ink == "#ffffff" else "checkmark-dark.svg")).as_posix()
     primary_hover = primary.lighter(112).name() if dark else primary.darker(110).name()
     return f"""
         QWidget {{ background: {bg}; color: {text}; font-family: 'Segoe UI'; font-size: 13px; }}
@@ -40,6 +42,10 @@ def stylesheet(dark=True, accent_color="#8864cb"):
         QLineEdit, QTextEdit, QComboBox, QSpinBox {{ background: {field}; border: 1px solid {line};
             border-radius: 7px; padding: 9px 11px; selection-background-color: {selected}; }}
         QLineEdit:focus, QTextEdit:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {accent}; }}
+        QComboBox {{ combobox-popup: 0; }}
+        QComboBox QAbstractItemView {{ background: {panel}; color: {text}; border: 1px solid {line};
+            outline: 0; selection-background-color: {selected}; selection-color: {text}; padding: 0; }}
+        QComboBox QAbstractItemView::item {{ padding: 9px 11px; border: none; }}
         QPushButton, QToolButton {{ background: transparent; border: 1px solid transparent;
             border-radius: 7px; padding: 9px 12px; }}
         QPushButton:hover, QToolButton:hover {{ background: {hover}; border-color: {line}; }}
@@ -48,7 +54,8 @@ def stylesheet(dark=True, accent_color="#8864cb"):
         QPushButton#primary {{ background: {primary.name()}; color: {ink}; font-weight: 600; }}
         QPushButton#primary:hover {{ background: {primary_hover}; }}
         QPushButton#advancedOptions:checked {{ background: {selected}; color: {accent}; border-color: {accent}; }}
-        QCheckBox::indicator:checked {{ background: {primary.name()}; border: 1px solid {accent}; border-radius: 3px; }}
+        QCheckBox::indicator {{ width: 16px; height: 16px; background: {field}; border: 1px solid {line}; border-radius: 3px; }}
+        QCheckBox::indicator:checked {{ background: {primary.name()}; border: 1px solid {accent}; image: url("{checkmark}"); }}
         QPushButton#primary:disabled {{ background: {line}; color: {muted}; }}
         QDialog#closeChoice QPushButton {{ background: transparent; border: 1px solid {line}; }}
         QDialog#closeChoice QPushButton:hover {{ background: {hover}; border-color: {accent}; }}
@@ -74,6 +81,8 @@ def stylesheet(dark=True, accent_color="#8864cb"):
         QToolButton::menu-indicator {{ width: 0; }}
         QPushButton#settingsAction {{ background: {field}; border: 1px solid {line}; border-radius: 7px; padding: 10px 12px; text-align: left; }}
         QPushButton#settingsAction:hover {{ background: {hover}; border-color: {accent}; }}
+        QPushButton[settingsControl="true"] {{ background: {field}; border: 1px solid {line}; border-radius: 7px; padding: 10px 12px; }}
+        QPushButton[settingsControl="true"]:hover {{ background: {hover}; border-color: {accent}; }}
         QFrame#settingsSeparator {{ color: {line}; background: {line}; max-height: 1px; margin: 8px 0; }}
         QToolTip {{ background: {panel}; color: {text}; border: 1px solid {line}; padding: 6px; }}
         QTableWidget {{ background: {panel}; gridline-color: {line}; border: 1px solid {line}; }}

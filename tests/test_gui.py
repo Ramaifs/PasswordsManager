@@ -131,6 +131,53 @@ def test_customization_saves_theme_and_accent(window, monkeypatch):
     assert '#007755' in window.styleSheet()
 
 
+def test_default_color_is_only_inside_color_picker(window, monkeypatch):
+    from PySide6.QtWidgets import QPushButton, QColorDialog
+    from PySide6.QtGui import QColor
+    def choose(picker):
+        reset = picker.findChild(QPushButton, 'accentColorDefault')
+        assert reset.text() == 'по умолчанию'
+        picker.setCurrentColor(QColor('#007755'))
+        reset.click()
+        assert picker.currentColor().name() == '#8864cb'
+        return QDialog.DialogCode.Accepted
+    def settings(dialog):
+        assert not any(button.text() in ('по умолчанию', 'Фиолетовый по умолчанию') for button in dialog.findChildren(QPushButton))
+        accent = dialog.findChild(QPushButton, 'settingsAccent')
+        accent.setText('#007755')
+        accent.click()
+        assert accent.text() == '#8864cb'
+        next(button for button in dialog.findChildren(QPushButton) if button.text() == 'Сохранить').click()
+    monkeypatch.setattr(QDialog, 'exec', settings)
+    monkeypatch.setattr(QColorDialog, 'exec', choose)
+    window.settings()
+    assert window.session.store.open(PASSWORD)[1]['settings']['accent_color'] == '#8864cb'
+
+
+def test_category_sort_groups_paths_and_keeps_unsaved_editor(window):
+    from password_manager import model
+    from password_manager.preferences import Preferences
+    from PySide6.QtCore import Qt
+    def seed(doc):
+        root = model.category(doc, 'Work')
+        child = model.category(doc, 'Mail', parent_id=root)
+        other = model.category(doc, 'Alpha')
+        first = model.save_entry(doc, {'title':'Zulu', 'category':other})
+        second = model.save_entry(doc, {'title':'Alpha', 'category':root})
+        third = model.save_entry(doc, {'title':'Bravo', 'category':root})
+        fourth = model.save_entry(doc, {'title':'Alpha', 'category':child})
+        return [first, second, third, fourth]
+    expected = window.session.mutate(seed)
+    window.refresh_categories()
+    window.refresh_entries()
+    window.fields['note'].setPlainText('UNSAVED-SORT-FIXTURE')
+    window.entry_sort.setCurrentIndex(window.entry_sort.findData('category'))
+    assert [window.entries.item(i).data(Qt.ItemDataRole.UserRole) for i in range(window.entries.count())] == expected
+    assert window.dirty and window.fields['note'].toPlainText() == 'UNSAVED-SORT-FIXTURE'
+    assert Preferences(window.session.store.root).entry_sort == 'category'
+    window.dirty = False
+
+
 def test_bulk_clipboard_and_additional_draft_reopen(window, monkeypatch):
     from PySide6.QtCore import Qt
     window.fields['title'].setText('Draft with extras')

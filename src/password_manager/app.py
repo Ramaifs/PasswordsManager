@@ -459,6 +459,7 @@ class Window(QMainWindow):
         self.entry_sort.setAccessibleName("Сортировка записей")
         self.entry_sort.addItem("По алфавиту (А–Я)", "title")
         self.entry_sort.addItem("По изменению (сначала новые)", "updated")
+        self.entry_sort.addItem("По категориям", "category")
         self.entry_sort.setCurrentIndex(self.entry_sort.findData(self.preferences.entry_sort))
         self.entry_sort.currentIndexChanged.connect(lambda: self.safe(self.change_entry_sort))
         cl.addWidget(self.entry_sort)
@@ -829,6 +830,8 @@ class Window(QMainWindow):
         entries.sort(key=lambda entry: (collator.sortKey(entry["title"]), entry["id"]))
         if self.entry_sort.currentData() == "updated":
             entries.sort(key=lambda entry: entry["updated_at"], reverse=True)
+        elif self.entry_sort.currentData() == "category":
+            entries.sort(key=lambda entry: collator.sortKey("Прочие пароли" if entry.get("entry_type") == "password" else model.category_path(self.session.document, entry["category"]) or "Без категории"))
         for entry in entries:
             cid = entry["category"]
             category_name = self.session.document["categories"].get(cid, "Без категории")
@@ -1338,9 +1341,6 @@ class Window(QMainWindow):
             control = button(label, lambda: self.safe(callback), layout)
             control.setObjectName("settingsAction")
             return control
-        general_heading = QLabel("Общие")
-        general_heading.setObjectName("sectionHeading")
-        layout.addWidget(general_heading)
         general = QFormLayout()
         theme = QComboBox()
         theme.setObjectName("settingsTheme")
@@ -1357,17 +1357,33 @@ class Window(QMainWindow):
         appearance.addRow("Тема", theme)
         accent = QPushButton(values.get("accent_color", "#8864cb"))
         accent.setObjectName("settingsAccent")
+        accent.setProperty("settingsControl", True)
         def choose_accent():
-            color = QColorDialog.getColor(QColor(accent.text()), dialog, "Основной цвет интерфейса")
-            if color.isValid():
-                accent.setText(color.name())
-                accent.setStyleSheet(f"border: 2px solid {color.name()};")
+            picker = QColorDialog(QColor(accent.text()), dialog)
+            picker.setObjectName("accentColorDialog")
+            picker.setWindowTitle("Основной цвет интерфейса")
+            picker.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+            reset_color = QPushButton("по умолчанию", picker)
+            reset_color.setObjectName("accentColorDefault")
+            reset_color.setProperty("settingsControl", True)
+            reset_color.clicked.connect(lambda: picker.setCurrentColor(QColor("#8864cb")))
+            actions = picker.findChild(QDialogButtonBox)
+            if actions:
+                actions.addButton(reset_color, QDialogButtonBox.ButtonRole.ResetRole)
+            else:
+                picker.layout().addWidget(reset_color)
+            if picker.exec() == QDialog.DialogCode.Accepted:
+                color = picker.currentColor()
+                if color.isValid():
+                    accent.setText(color.name())
+                    accent.setStyleSheet(f"border: 1px solid {color.name()};")
         accent.clicked.connect(choose_accent)
         appearance.addRow("Основной цвет", accent)
-        reset_accent = QPushButton("Фиолетовый по умолчанию")
-        reset_accent.clicked.connect(lambda: accent.setText("#8864cb"))
-        appearance.addRow("", reset_accent)
         layout.addLayout(appearance)
+        separator()
+        general_heading = QLabel("Общие")
+        general_heading.setObjectName("sectionHeading")
+        layout.addWidget(general_heading)
         general.addRow("Автоблокировка, минут", minutes)
         close_action = QComboBox()
         close_action.setObjectName("closeActionSetting")

@@ -1,5 +1,5 @@
 """Category navigation with explicit move targets and fold controls."""
-from PySide6.QtCore import Qt, QMimeData, QPointF, Signal
+from PySide6.QtCore import Qt, QMimeData, QPointF, Signal, QSize
 from PySide6.QtGui import QDrag, QPen, QPolygonF
 from PySide6.QtWidgets import QListWidget, QStyledItemDelegate, QAbstractItemView
 
@@ -9,6 +9,10 @@ COLLAPSED = int(Qt.ItemDataRole.UserRole) + 2
 
 
 class CategoryDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index):
+        # Category labels fit the sidebar; long names must not widen its content.
+        return QSize(0, super().sizeHint(option, index).height())
+
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
         if index.data(HAS_CHILDREN) and option.rect.width() > 0:
@@ -34,6 +38,8 @@ class CategoryList(QListWidget):
         super().__init__(parent)
         self.category_ids = set()
         self.setItemDelegate(CategoryDelegate(self))
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
