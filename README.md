@@ -2,23 +2,25 @@
 
 [Архитектура проекта: компоненты, данные и карта исходников](ARCHITECTURE.md).
 
-Версия 0.40. Менеджер паролей для Windows x64 на Python и PySide6. Хранит записи в зашифрованном локальном хранилище и поддерживает синхронизацию через Google Drive. Отдельная [веб-версия](web/password-manager/README.md) работает с файлами того же формата PMVAULT.
+Версия 0.41. Менеджер паролей для Windows x64 на Python и PySide6. Хранит записи в зашифрованном локальном хранилище и поддерживает синхронизацию через Google Drive. Отдельная [веб-версия](web/password-manager/README.md) работает с файлами того же формата PMVAULT.
 
 Возможности:
 
 - Записи с отдельными полями сайта, логина, почты, телефона, пароля и заметки.
 - Вложенные категории с перетаскиванием и сворачиванием, цветные названия записей, поиск и темы.
+- Основной цвет интерфейса, дополнительные нумерованные поля и единый показ всех паролей записи.
+- Загрузка выбранной версии с GitHub прямо из приложения с проверкой SHA-256.
 - Генератор паролей, корзина, импорт JSON и зашифрованный экспорт.
 - Мастер-пароль, ключ восстановления, автоматическая блокировка, закрытие в трей и восемь резервных состояний.
 - Синхронизация с сохранением конфликтующих версий и работа без интернета.
 
 ## Установка
 
-Версия 0.40: [установщик PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.40/PasswordsManager.exe) или [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.40/PasswordManager-0.40-portable.zip). В переносимой версии запустите `PasswordManager.exe` рядом с каталогом `_internal`. Python для готовой сборки не нужен.
+Версия 0.41: [установщик PasswordsManager.exe](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.41/PasswordsManager.exe) или [portable ZIP](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.41/PasswordManager-0.41-portable.zip). В установщике можно выбрать папку программы. В переносимой версии запустите `PasswordManager.exe` рядом с каталогом `_internal`. Python для готовой сборки не нужен.
 
 Данные хранятся отдельно от программы: `%LOCALAPPDATA%\PersonalPasswordManager`. При создании хранилища сохраните ключ восстановления отдельно. Подробности — в [инструкции пользователя](USER_GUIDE.md).
 
-Локальная сборка 0.40: `releases/0.40/PasswordsManager.exe` и `releases/0.40/PasswordManager-0.40-portable.zip`. Для длительного входа Google на сайте нужна [настройка Worker](deployment/cloudflare-worker/README.md).
+Локальная сборка 0.41: `releases/0.41/PasswordsManager.exe` и `releases/0.41/PasswordManager-0.41-portable.zip`. Для длительного входа Google на сайте нужна [настройка Worker](deployment/cloudflare-worker/README.md).
 
 ## Разработка
 
@@ -38,7 +40,7 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-Сборка: `scripts/build.py`. Проверка собранного приложения: `scripts/check_bundle.py`. Подготовка лицензий и архива: `scripts/collect_licenses.py` и `scripts/package_release.py`. Полная локальная проверка: `scripts/verify.py`.
+Сборка: `scripts/build.py`. Проверка собранного приложения: `scripts/check_bundle.py`. Подготовка лицензий: `scripts/collect_licenses.py`. Установщик и portable ZIP: `scripts/package_windows.py`; веб-архив: `scripts/package_web.py`. Проверка полученных архивов: `scripts/audit_release.py`.
 
 Автотесты используют Qt offscreen и имитацию Drive. Реальный вход Google, обмен между двумя компьютерами, сон и блокировка Windows требуют отдельной проверки. Независимый аудит безопасности не проводился; для испытаний используйте вымышленные данные. [Результаты и ограничения](docs/verification.md).
 
@@ -50,7 +52,7 @@ py -3.14 -m venv .venv
 - [Настройка Google OAuth](docs/google-setup.md).
 - [Веб-версия](docs/web.md) и [размещение на Cloudflare](deployment/cloudflare-pages/README.md).
 - [Архитектурные решения](docs/adr/0004-pyside6-arr.md).
-- [История изменений](CHANGELOG.md) и [изменения версии 0.40](docs/release-0.40.md).
+- [История изменений](CHANGELOG.md) и [изменения версии 0.41](docs/release-0.41.md).
 
 Исходный консольный проект: [Ramaifs/Passwords-Manager](https://github.com/Ramaifs/Passwords-Manager). Его JSON-формат поддерживается при импорте; пример с вымышленными данными — [legacy-demo.json](examples/legacy-demo.json).
 

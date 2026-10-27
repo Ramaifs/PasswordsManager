@@ -21,6 +21,7 @@ class Session:
         # Expiry is an explicit new persisted state, never a read-time disappearance.
         expired = deepcopy(doc)
         model.expire_trash(expired)
+        model.migrate_old_passwords(expired)
         if expired != doc:
             from .sync_state import track
             track(doc, expired, self.actor)

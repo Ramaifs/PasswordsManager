@@ -10,6 +10,47 @@ FIELDS = ("title", "site", "username", "email", "phone", "password", "second_pas
 OPTIONAL_FIELDS = {"second_password", "old_passwords"}
 SECRET_FIELDS = {"password", *OPTIONAL_FIELDS}
 SUGGESTION_FIELDS = ("email", "phone", "username", "site")
+EXTRA_FIELDS = (*SUGGESTION_FIELDS, "password", "second_password")
+
+
+def valid_additional(value):
+    return (isinstance(value, dict) and not set(value) - set(EXTRA_FIELDS)
+            and all(isinstance(items, list) and len(items) <= 100
+                    and all(isinstance(item, str) and len(item) <= 100_000 for item in items)
+                    for items in value.values()))
+
+
+def additional_fields(record):
+    """Project legacy secrets without modifying immutable sync register values."""
+    result = deepcopy(record.get("additional_fields", {}))
+    if record.get("old_passwords"):
+        # A legacy value may contain punctuation or newlines belonging to the secret.
+        result.setdefault("password", []).insert(0, record["old_passwords"])
+    return result
+
+
+def migrate_old_passwords(doc):
+    for record in [*doc["entries"].values(), *doc["drafts"].values()]:
+        if record.get("old_passwords"):
+            record["additional_fields"] = additional_fields(record)
+            record["old_passwords"] = ""
+
+
+def display_fields(record, labels):
+    extra = additional_fields(record)
+    for key, label in labels.items():
+        yield key, label, record.get(key, "")
+        for index, value in enumerate(extra.get(key, []), 2):
+            yield key, f"{label} №{index}", value
+
+
+def paste_passwords(doc, text):
+    passwords = [line for line in re.split(r"\r\n|[\r\n]", text) if line]
+    if not passwords:
+        raise VaultError("В буфере обмена нет паролей.")
+    if len(passwords) > 1000 or any(len(value) > 100_000 for value in passwords):
+        raise VaultError("Можно вставить до 1000 паролей, каждый до 100000 символов.")
+    return [save_entry(doc, {"entry_type": "password", "password": value}) for value in passwords]
 
 
 def suggestions(doc, field):
@@ -17,20 +58,21 @@ def suggestions(doc, field):
         return []
     values = {}
     for entry in doc["entries"].values():
-        value = entry[field]
-        if not entry["deleted_at"] and value.strip():
-            values.setdefault(value.casefold(), value)
+        for value in [entry[field], *additional_fields(entry).get(field, [])]:
+            if not entry["deleted_at"] and value.strip():
+                values.setdefault(value.casefold(), value)
     return sorted(values.values(), key=str.casefold)
 
 
 def valid_fields(record, extra):
     """Accept legacy records without changing immutable causal register values."""
     required = (set(FIELDS) - OPTIONAL_FIELDS) | set(extra)
-    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type"}
+    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type", "additional_fields"}
+            and valid_additional(record.get("additional_fields", {}))
             and record.get("entry_type", "account") in ("account", "password")
             and all(isinstance(record.get(f, ""), str) and len(record.get(f, "")) <= 100_000 for f in FIELDS)
             and (record.get("entry_type") != "password" or
-                 (record["category"] is None and not any(record.get(f, "") for f in FIELDS if f not in ("title", "password", "note"))
+                 (record["category"] is None and not any(record.get("additional_fields", {}).values()) and not any(record.get(f, "") for f in FIELDS if f not in ("title", "password", "note"))
                   and ("id" not in extra or bool(record["password"])))))
 
 
@@ -93,7 +135,9 @@ def validate(document):
             if str(uuid.UUID(eid)) != eid or datetime.fromisoformat(timestamp).tzinfo is None:
                 raise InvalidVault()
         settings = document["settings"]
-        if set(settings) - {"theme", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates", "vault_name"}:
+        if set(settings) - {"theme", "accent_color", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates", "vault_name"}:
+            raise InvalidVault()
+        if "accent_color" in settings and (not isinstance(settings["accent_color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", settings["accent_color"])):
             raise InvalidVault()
         if "vault_name" in settings:
             from .vault_names import validate_name
@@ -144,7 +188,7 @@ def save_entry(doc, values, entry_id=None):
         values["title"] = password_title(values.get("note", ""))
     if not isinstance(values.get("title"), str) or not values["title"].strip():
         raise VaultError("Укажите название записи.")
-    if set(values) - (set(FIELDS) | {"category", "entry_type"}):
+    if set(values) - (set(FIELDS) | {"category", "entry_type", "additional_fields"}):
         raise VaultError("Неизвестные поля записи.")
     if any(not isinstance(values.get(f, ""), str) or len(values.get(f, "")) > 100_000 for f in FIELDS):
         raise VaultError("Недопустимые поля записи.")
@@ -155,6 +199,8 @@ def save_entry(doc, values, entry_id=None):
         raise VaultError("Запись не найдена.")
     entry_id = entry_id or str(uuid.uuid4())
     record = {f: values.get(f, "") for f in FIELDS}
+    if "additional_fields" in values:
+        record["additional_fields"] = deepcopy(values["additional_fields"])
     record.update(id=entry_id, category=category, deleted_at=None, updated_at=now())
     if "entry_type" in values:
         record["entry_type"] = values["entry_type"]
@@ -293,14 +339,14 @@ def search(doc, query="", category_id="all", deleted=False):
     query = query.strip().casefold()
     phone_query = re.sub(r"[^0-9]", "", query) if re.fullmatch(r"\+?[0-9\s().-]+", query) else ""
     def matches(entry):
-        values = [entry.get(f, "") for f in FIELDS]
+        values = [entry.get(f, "") for f in FIELDS] + [v for items in additional_fields(entry).values() for v in items]
         return (any(query in value.casefold() for value in values)
                 or bool(phone_query and any(phone_query in re.sub(r"[^0-9]", "", number)
                     for value in values for number in re.findall(r"\+?[0-9][0-9\s().-]*", value))))
 
     selected = category_descendants(doc, category_id)
     return [deepcopy(e) for e in doc["entries"].values()
-            if bool(e["deleted_at"]) == deleted and (category_id == "all" or e["category"] in selected
+            if bool(e["deleted_at"]) == deleted and (category_id == "all" or (e.get("entry_type") != "password" and e["category"] in selected)
                 or (category_id == "other-passwords" and e.get("entry_type") == "password"))
             and matches(e)]
 

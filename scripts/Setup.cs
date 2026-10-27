@@ -16,7 +16,47 @@ static class Setup {
  const string AppName = "Password Manager";
  static string Version { get { return ((AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(Assembly.GetExecutingAssembly(), typeof(AssemblyInformationalVersionAttribute))).InformationalVersion; } }
  const string UninstallKey = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\PersonalPasswordManager";
- static readonly string Target = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "PersonalPasswordManager");
+ static string Target = DefaultTarget();
+ static string DefaultTarget() {
+  using (var key = Registry.CurrentUser.OpenSubKey(UninstallKey)) {
+   var saved = key == null ? null : key.GetValue("InstallLocation") as string;
+   if (!String.IsNullOrWhiteSpace(saved) && Path.IsPathRooted(saved)) return Path.GetFullPath(saved);
+  }
+  return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "PersonalPasswordManager");
+ }
+ static bool ChooseTarget() {
+  using (var form = new Form()) {
+   form.Text = "Установка Password Manager " + Version;
+   form.ClientSize = new System.Drawing.Size(610, 220);
+   form.FormBorderStyle = FormBorderStyle.FixedDialog; form.MaximizeBox = false; form.MinimizeBox = false;
+   form.StartPosition = FormStartPosition.CenterScreen;
+   var label = new Label { Left=20, Top=18, Width=570, Height=38, Text="Выберите папку установки менеджера паролей:" };
+   var path = new TextBox { Left=20, Top=59, Width=465, Text=Target };
+   var browse = new Button { Left=495, Top=57, Width=95, Text="Обзор…" };
+   browse.Click += delegate {
+    using (var picker = new FolderBrowserDialog()) {
+     picker.Description="Папка установки Password Manager"; picker.SelectedPath=path.Text;
+     if (picker.ShowDialog(form) == DialogResult.OK) path.Text=picker.SelectedPath;
+    }
+   };
+   var hint = new Label { Left=20, Top=98, Width=570, Height=48, Text="Будет создан ярлык в меню «Пуск». Пароли сохраняются отдельно в AppData.\nВыберите папку, в которую у вашей учётной записи есть право записи." };
+   var install = new Button { Left=355, Top=166, Width=115, Text="Установить" };
+   install.Click += delegate {
+    try {
+     if (String.IsNullOrWhiteSpace(path.Text) || !Path.IsPathRooted(path.Text.Trim())) throw new IOException("Укажите полный путь к папке.");
+     string selected=Path.GetFullPath(path.Text.Trim()).TrimEnd(Path.DirectorySeparatorChar);
+     if (String.Equals(selected, Path.GetPathRoot(selected).TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) throw new IOException("Выберите отдельную папку для приложения.");
+     CheckPath(Path.Combine(selected,"probe"), selected);
+     if (Directory.Exists(selected) && Directory.GetFileSystemEntries(selected).Length != 0 && !File.Exists(Path.Combine(selected,"installed-files.txt"))) throw new IOException("Папка занята. Выберите пустую папку или папку установленного Password Manager.");
+     Target=selected; form.DialogResult=DialogResult.OK;
+    } catch (Exception error) { MessageBox.Show(form,error.Message,AppName,MessageBoxButtons.OK,MessageBoxIcon.Warning); }
+   };
+   var cancel = new Button { Left=480, Top=166, Width=110, Text="Отмена", DialogResult=DialogResult.Cancel };
+   form.Controls.AddRange(new Control[] {label,path,browse,hint,install,cancel});
+   form.AcceptButton=install; form.CancelButton=cancel;
+   return form.ShowDialog() == DialogResult.OK;
+  }
+ }
  static readonly string Shortcut = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Password Manager.lnk");
  static readonly string[] AllowedArgs = new string[] { "--uninstall", "--remove", "--verify" };
  static void CheckPath(string path, string root) {
@@ -79,7 +119,7 @@ static class Setup {
  static void Install() {
   EnsureClosed();
   CheckPath(Path.Combine(Target,"probe"), Target);
-  if (Directory.Exists(Target) && !File.Exists(Path.Combine(Target,"installed-files.txt"))) throw new IOException("Папка установки уже занята. Освободите её вручную после проверки файлов.");
+  if (Directory.Exists(Target) && Directory.GetFileSystemEntries(Target).Length != 0 && !File.Exists(Path.Combine(Target,"installed-files.txt"))) throw new IOException("Папка установки уже занята. Выберите пустую папку.");
   string stage = Target + ".staging-" + Guid.NewGuid().ToString("N");
   Extract(stage);
   string manifest = ResourceText("payload.sha256");
@@ -118,7 +158,7 @@ static class Setup {
    if (MessageBox.Show("Удалить приложение? Хранилище паролей в AppData сохранится.",AppName,MessageBoxButtons.YesNo) != DialogResult.Yes) return;
    string temporary = Path.Combine(Path.GetTempPath(), "PasswordManager-Uninstall-" + Guid.NewGuid().ToString("N") + ".exe");
    File.Copy(Assembly.GetExecutingAssembly().Location, temporary);
-   Process.Start(new ProcessStartInfo(temporary, "--remove") { UseShellExecute = false, CreateNoWindow = true });
+   Process.Start(new ProcessStartInfo(temporary, "--remove \"" + Target + "\"") { UseShellExecute = false, CreateNoWindow = true });
    return;
   }
   string manifestPath = Path.Combine(Target,"installed-files.txt");
@@ -129,21 +169,38 @@ static class Setup {
   CheckPath(Path.Combine(Target,"Uninstall.exe"),Target);
   foreach (string line in lines) File.Delete(Path.Combine(Target,line.Substring(66)));
   File.Delete(Path.Combine(Target,"Uninstall.exe")); File.Delete(manifestPath);
-  if (File.Exists(Shortcut)) File.Delete(Shortcut);
-  Registry.CurrentUser.DeleteSubKeyTree(UninstallKey,false);
+  using (var key = Registry.CurrentUser.OpenSubKey(UninstallKey)) {
+   if (key != null && String.Equals(key.GetValue("InstallLocation") as string, Target, StringComparison.OrdinalIgnoreCase)) {
+    if (File.Exists(Shortcut)) File.Delete(Shortcut);
+    Registry.CurrentUser.DeleteSubKeyTree(UninstallKey,false);
+   }
+  }
   RemoveEmptyDirectories(Target);
   MessageBox.Show("Приложение удалено. Хранилище паролей в AppData сохранено.",AppName);
  }
  [STAThread] static int Main(string[] args) {
   Application.EnableVisualStyles();
   try {
+   if (args.Length == 2 && args[0] == "--wait-pid") {
+    int pid;
+    if (!Int32.TryParse(args[1],out pid) || pid <= 0 || pid == Process.GetCurrentProcess().Id) throw new IOException("Неверный процесс обновления.");
+    try { using (var previous=Process.GetProcessById(pid)) if (!previous.WaitForExit(30000)) throw new IOException("Закройте приложение перед обновлением."); }
+    catch (ArgumentException) { }
+    args = new string[0];
+   }
    if (args.Length == 2 && args[0] == "--verify") { Extract(Path.GetFullPath(args[1])); return 0; }
+   if (args.Length == 2 && args[0] == "--remove") { Target=Path.GetFullPath(args[1]); Uninstall(true); return 0; }
+   if (args.Length == 0 || (args.Length == 1 && args[0] == "--uninstall")) {
+#if UNINSTALLER
+    Target=Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+#endif
+   }
    if (args.Length == 1 && (args[0] == "--uninstall" || args[0] == "--remove")) { Uninstall(args[0] == "--remove"); return 0; }
 #if UNINSTALLER
    Uninstall(false); return 0;
 #else
    if (args.Length != 0) throw new IOException("Неизвестный параметр.");
-   if (MessageBox.Show("Установить Password Manager " + Version + " для текущего пользователя?\n\n" + Target + "\n\nБудет создан ярлык в меню «Пуск». Пароли хранятся отдельно в AppData.",AppName,MessageBoxButtons.OKCancel) != DialogResult.OK) return 0;
+   if (!ChooseTarget()) return 0;
    Install(); return 0;
 #endif
   } catch (Exception error) { MessageBox.Show("Операция не завершена.\n" + error.Message,AppName,MessageBoxButtons.OK,MessageBoxIcon.Error); return 1; }

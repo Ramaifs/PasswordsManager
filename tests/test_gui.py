@@ -73,37 +73,118 @@ def test_search_box_filters_records_by_formatted_phone(window):
 
 
 def test_extra_password_fields_mask_copy_save_reopen_and_lock(window, app):
-    from PySide6.QtWidgets import QLineEdit
     from password_manager.cloud_browser import CloudPreviewDialog
     window.new_entry()
+    assert window.field_groups[window.fields['second_password']][0].isHidden()
+    assert 'old_passwords' not in window.fields
+    assert not window.advanced.isChecked()
+    window.advanced.click()
     window.fields['title'].setText('Extra secrets')
-    for key in ['second_password', 'old_passwords']:
-        window.fields[key].setText(key + '-FICTIONAL-SECRET')
-        assert window.fields[key].echoMode() == QLineEdit.EchoMode.Password
-        window.secret_reveals[key].setChecked(True)
+    window.fields['password'].setText('PRIMARY-FICTIONAL-SECRET')
+    window.fields['second_password'].setText('2FA-FICTIONAL-SECRET')
+    for key in ['password', 'second_password', 'email', 'phone', 'site', 'username']:
+        window.extra_buttons[key].click()
+        widget = window.extra_widgets[key][0][1]
+        widget.setText(key + '-ADDITIONAL-FIXTURE')
+        if key in ['password', 'second_password']:
+            assert widget.echoMode() == QLineEdit.EchoMode.Password
+    window.reveal.setChecked(True)
+    for key in ['password', 'second_password']:
         assert window.fields[key].echoMode() == QLineEdit.EchoMode.Normal
-        window.secret_copy_buttons[key].click()
-        assert QApplication.clipboard().text() == window.fields[key].text()
-        window.clear_clipboard()
-        assert QApplication.clipboard().text() == ''
+        assert window.extra_widgets[key][0][1].echoMode() == QLineEdit.EchoMode.Normal
+    window.secret_copy_buttons['second_password'].click()
+    assert QApplication.clipboard().text() == '2FA-FICTIONAL-SECRET'
+    window.clear_clipboard()
     window.save()
     eid = window.selected_id
     opened = window.session.store.open(PASSWORD)[1]
-    assert opened['entries'][eid]['second_password'] == 'second_password-FICTIONAL-SECRET'
-    assert opened['entries'][eid]['old_passwords'] == 'old_passwords-FICTIONAL-SECRET'
+    assert opened['entries'][eid]['additional_fields']['password'] == ['password-ADDITIONAL-FIXTURE']
     window.fill_editor(opened['entries'][eid])
-    for key in ['second_password', 'old_passwords']:
+    assert window.advanced.isChecked() and not window.reveal.isChecked()
+    for key in ['password', 'second_password']:
         assert window.fields[key].echoMode() == QLineEdit.EchoMode.Password
+        assert window.extra_widgets[key][0][1].echoMode() == QLineEdit.EchoMode.Password
     preview = CloudPreviewDialog(window, {'name': 'Fixture'}, window.session.access, opened)
     assert 'FICTIONAL-SECRET' not in preview.details.toPlainText()
+    assert 'password-ADDITIONAL-FIXTURE' not in preview.details.toPlainText()
     preview.reveal.setChecked(True)
-    assert 'second_password-FICTIONAL-SECRET' in preview.details.toPlainText()
-    assert 'old_passwords-FICTIONAL-SECRET' in preview.details.toPlainText()
+    assert '2FA-FICTIONAL-SECRET' in preview.details.toPlainText()
+    assert 'password-ADDITIONAL-FIXTURE' in preview.details.toPlainText()
     preview.clear()
     preview.deleteLater()
+    extra_widget = window.extra_widgets['password'][0][1]
     window.lock_vault()
-    assert not window.session.unlocked
-    assert not window.fields
+    assert extra_widget.text() == ''
+    assert not window.session.unlocked and not window.fields
+
+
+def test_customization_saves_theme_and_accent(window, monkeypatch):
+    from PySide6.QtWidgets import QPushButton, QComboBox
+    def change(dialog):
+        dialog.findChild(QComboBox, 'settingsTheme').setCurrentIndex(1)
+        dialog.findChild(QPushButton, 'settingsAccent').setText('#007755')
+        next(button for button in dialog.findChildren(QPushButton) if button.text() == 'Сохранить').click()
+    monkeypatch.setattr(QDialog, 'exec', change)
+    window.settings()
+    saved = window.session.store.open(PASSWORD)[1]['settings']
+    assert saved['theme'] == 'light' and saved['accent_color'] == '#007755'
+    assert '#007755' in window.styleSheet()
+
+
+def test_bulk_clipboard_and_additional_draft_reopen(window, monkeypatch):
+    from PySide6.QtCore import Qt
+    window.fields['title'].setText('Draft with extras')
+    window.advanced.click()
+    window.extra_buttons['password'].click()
+    window.extra_widgets['password'][0][1].setText('DRAFT-EXTRA-FIXTURE')
+    window.lock_vault()
+    assert window.session.store.open(PASSWORD)[1]['drafts']['new']['additional_fields']['password'] == ['DRAFT-EXTRA-FIXTURE']
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
+    window.master.setText(PASSWORD)
+    window.open_or_create()
+    assert window.extra_widgets['password'][0][1].text() == 'DRAFT-EXTRA-FIXTURE'
+    assert window.advanced.isChecked()
+    window.dirty = False
+    window.session.mutate(lambda doc: doc['drafts'].clear())
+    other = next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == 'other-passwords')
+    window.categories.setCurrentItem(other)
+    QApplication.clipboard().setText(' fixture-one \nfixture-two\r\nfixture-three')
+    window.paste_button.click()
+    assert window.entries.count() == 3
+    assert window.session.store.open(PASSWORD)[1]['entries'] == window.session.document['entries']
+    QApplication.clipboard().clear()
+
+
+def test_update_dialog_downloads_and_enables_install_without_launch(window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QPushButton, QComboBox
+    from PySide6.QtTest import QTest
+    import password_manager.updates as updates
+    import time
+    calls = []
+    def download(release, root, **kwargs):
+        calls.append(release)
+        kwargs['progress'](1, 1)
+        return {'path': tmp_path / 'fixture.exe', 'sha256': '0' * 64, 'version': release['version']}
+    monkeypatch.setattr(updates, 'download_release', download)
+    def inspect(dialog):
+        dialog.show()
+        versions = dialog.findChild(QComboBox, 'updateVersions')
+        assert versions.count() == 2
+        install = dialog.findChild(QPushButton, 'installUpdate')
+        assert not install.isEnabled()
+        next(button for button in dialog.findChildren(QPushButton) if button.text() == 'Скачать').click()
+        deadline = time.monotonic() + 3
+        while window.updates.busy and time.monotonic() < deadline:
+            QApplication.processEvents()
+            QTest.qWait(10)
+        QApplication.processEvents()
+        assert install.isEnabled()
+        assert calls == [{'tag': 'v0.41', 'version': '0.41'}]
+        versions.setCurrentIndex(1)
+        assert not install.isEnabled() and window.updates.downloaded is None
+        dialog.reject()
+    monkeypatch.setattr(QDialog, 'exec', inspect)
+    window.updates.show_versions([{'tag': 'v0.41', 'version': '0.41'}, {'tag': 'v0.40', 'version': '0.40'}])
 
 
 def test_new_entry_uses_selected_category_and_subcategory(window):

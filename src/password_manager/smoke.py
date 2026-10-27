@@ -64,18 +64,23 @@ def run(output):
             window.fields["phone"].setText("+7 (999) 123-45-67")
             window.fields["password"].setText(generate()[0])
             window.fields["second_password"].setText("SECOND-FROZEN-FICTIONAL")
-            window.fields["old_passwords"].setText("OLD-FROZEN-FICTIONAL; older password")
+            window.advanced.setChecked(True)
+            window.add_extra_field("password", "ADDITIONAL-FROZEN-FICTIONAL; older password")
             window.fields["note"].setPlainText("Вымышленные данные для проверки сборки.")
             window.save()
             eid = window.selected_id
             assert store.open(master)[1]["entries"][eid]["email"] == "demo@example.invalid"
             results["checks"].append("gui-save-reopen")
             reopened = store.open(master)[1]["entries"][eid]
-            for field in ("second_password", "old_passwords"):
+            for field in ("second_password",):
                 assert reopened[field] == window.fields[field].text()
                 assert window.fields[field].echoMode() == window.fields["password"].EchoMode.Password
                 assert reopened[field].encode() not in store.snapshots()[0].read_bytes()
-            results["checks"].append("second-and-old-passwords-encrypted-masked-save-reopen")
+            extra = reopened["additional_fields"]["password"][0]
+            assert extra == "ADDITIONAL-FROZEN-FICTIONAL; older password"
+            assert extra.encode() not in store.snapshots()[0].read_bytes()
+            assert window.extra_widgets["password"][0][1].echoMode() == window.fields["password"].EchoMode.Password
+            results["checks"].append("second-and-additional-passwords-encrypted-masked-save-reopen")
             assert store.open(recovery, recovery=True)[1]["entries"][eid]["username"] == "fictional-user"
             results["checks"].append("recovery")
             window.query.setText("+7999")

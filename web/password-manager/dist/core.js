@@ -1,3 +1,4 @@
+import { EXTRA_FIELDS } from './additional-fields.js';
 import { validateParents } from './categories.js';
 import { argon2id } from './vendor/hash-wasm.js';
 
@@ -190,10 +191,11 @@ export function newDocument() {
 function timestamp(value) { return text(value) && /(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value)); }
 function validFields(value, extra) {
   // Preserve old wire values exactly: adding empty fields would reuse causal dots.
-  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : [])]) &&
+  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : []), ...(Object.hasOwn(value, 'additional_fields') ? ['additional_fields'] : [])]) &&
+    (!Object.hasOwn(value, 'additional_fields') || (object(value.additional_fields) && Object.entries(value.additional_fields).every(([key, items]) => EXTRA_FIELDS.includes(key) && Array.isArray(items) && items.length <= 100 && items.every(item => text(item) && charLength(item) <= 100000)))) &&
     (!Object.hasOwn(value, 'entry_type') || ['account', 'password'].includes(value.entry_type)) &&
     FIELDS.every(f => !Object.hasOwn(value, f) || (text(value[f]) && charLength(value[f]) <= 100000)) &&
-    (value.entry_type !== 'password' || (value.category === null && FIELDS.every(f => ['title', 'password', 'note'].includes(f) || !value[f]) && (!extra.includes('id') || !!value.password)));
+    (value.entry_type !== 'password' || (value.category === null && !Object.values(value.additional_fields || {}).some(items => items.length) && FIELDS.every(f => ['title', 'password', 'note'].includes(f) || !value[f]) && (!extra.includes('id') || !!value.password)));
 }
 function validateRecord(entry, id) {
   if (!validFields(entry, ['id', 'category', 'deleted_at', 'updated_at']) || entry.id !== id || !uuidPattern.test(id)) fail();
@@ -215,7 +217,8 @@ export function validateDocument(doc) {
     if (!validFields(draft, ['category']) || (draft.category !== null && typeof draft.category !== 'string')) fail();
   }
   const s = doc.settings;
-  if (Object.keys(s).some(k => !['theme', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
+  if (Object.keys(s).some(k => !['theme', 'accent_color', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
+  if (Object.hasOwn(s, 'accent_color') && (typeof s.accent_color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.accent_color))) fail();
   if (Object.hasOwn(s, 'sync_minutes') && (!Number.isInteger(s.sync_minutes) || s.sync_minutes < 0 || s.sync_minutes > 1440)) fail();
   if (s.category_colors !== undefined && (!object(s.category_colors) || Object.entries(s.category_colors).some(([id, color]) => !uuidPattern.test(id) || typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)))) fail();
   if (Object.hasOwn(s, 'vault_name') && (typeof s.vault_name !== 'string' || !s.vault_name.trim() || charLength(s.vault_name) > 100 || /[\x00-\x1f]/.test(s.vault_name))) fail();

@@ -29,7 +29,7 @@ from .storage import Store, read_bounded
 
 LABELS = {"title": "Название", "site": "Сайт", "username": "Логин", "email": "Почта",
           "phone": "Телефон", "password": "Пароль", "second_password": "Второй пароль (2FA)",
-          "old_passwords": "Старые пароли", "note": "Заметка"}
+          "note": "Заметка"}
 
 
 def button(text, callback, layout):
@@ -498,11 +498,21 @@ class Window(QMainWindow):
             group = QVBoxLayout(container)
             group.setContentsMargins(0, 0, 0, 0)
             group.setSpacing(7)
-            group.addWidget(QLabel(label))
+            heading = QHBoxLayout()
+            heading.addWidget(QLabel(label), 1)
+            if widget in self.fields.values() and next(k for k, v in self.fields.items() if v is widget) in model.EXTRA_FIELDS:
+                key = next(k for k, v in self.fields.items() if v is widget)
+                plus = button("+", lambda checked=False, name=key: self.safe(lambda: self.add_extra_field(name)), heading)
+                plus.setAccessibleName("Добавить: " + label)
+                self.extra_buttons[key] = plus
+            group.addLayout(heading)
             group.addWidget(widget)
             form.addWidget(container, row, column, 1, span)
             self.field_groups[widget] = (container, row, column, span)
         self.fields = {}
+        self.editing = True
+        self.extra_buttons = {}
+        self.extra_widgets = {key: [] for key in model.EXTRA_FIELDS}
         self.secret_reveals = {}
         self.secret_copy_buttons = {}
         for key, label in LABELS.items():
@@ -523,21 +533,25 @@ class Window(QMainWindow):
                 widget.setCompleter(completer)
                 completer.activated[str].connect(widget.setText)
             field(label, widget, *positions[key])
-            if key in model.OPTIONAL_FIELDS:
+            if key == "second_password":
                 controls = QHBoxLayout()
-                reveal = QCheckBox("Показать")
-                reveal.setAccessibleName("Показать: " + label)
-                reveal.toggled.connect(lambda visible, target=widget: target.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password))
-                controls.addWidget(reveal)
-                self.secret_reveals[key] = reveal
                 self.secret_copy_buttons[key] = button("Копировать", lambda checked=False, field=key: self.copy_password(field), controls)
                 self.field_groups[widget][0].layout().addLayout(controls)
         self.record_category = QComboBox()
         self.record_category.currentIndexChanged.connect(self.mark_dirty)
         field("Категория", self.record_category, 3, 1)
         self.reveal = QCheckBox("Показать пароль")
-        self.reveal.toggled.connect(lambda visible: self.fields["password"].setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password))
-        editor.addWidget(self.reveal)
+        self.reveal.toggled.connect(self.reveal_passwords)
+        options = QHBoxLayout()
+        options.addWidget(self.reveal)
+        options.addStretch()
+        self.advanced = QPushButton("Продвинутые настройки")
+        self.advanced.setObjectName("advancedOptions")
+        self.advanced.setCheckable(True)
+        self.advanced.toggled.connect(lambda _: self.set_editing(self.editing))
+        options.addWidget(self.advanced)
+        editor.addLayout(options)
+        self.paste_button = button("Вставить пароли из буфера обмена (по строкам)", lambda: self.safe(self.paste_other_passwords), editor)
         actions = QHBoxLayout()
         self.save_button = button("Сохранить", lambda: self.safe(self.save), actions)
         self.save_button.setObjectName("primary")
@@ -617,12 +631,16 @@ class Window(QMainWindow):
         return menu
 
     def set_editing(self, editing):
+        self.editing = editing
         for widget in self.fields.values():
             widget.setReadOnly(not editing)
         visible_row = 0
         for widget, (container, row, column, span) in sorted(self.field_groups.items(), key=lambda item: item[1][1:3]):
             self.field_form.removeWidget(container)
             if self.password_only and widget not in (self.fields["password"], self.fields["note"]):
+                container.hide()
+                continue
+            if widget is self.fields["second_password"] and not self.advanced.isChecked():
                 container.hide()
                 continue
             populated = bool(widget.currentData()) if widget is self.record_category else bool((widget.toPlainText() if isinstance(widget, QTextEdit) else widget.text()).strip())
@@ -639,6 +657,57 @@ class Window(QMainWindow):
         self.save_button.setVisible(editing)
         self.generate_button.setVisible(editing)
         self.edit_button.setVisible(bool(self.selected_id) and not editing and not self.session.document["entries"][self.selected_id]["deleted_at"])
+        self.advanced.setVisible(not self.password_only)
+        self.paste_button.setVisible(self.password_only)
+        for key, control in self.extra_buttons.items():
+            control.setVisible(editing and self.advanced.isChecked() and not self.password_only)
+        for items in self.extra_widgets.values():
+            for container, widget in items:
+                container.setVisible(self.advanced.isChecked() and not self.password_only and (editing or bool(widget.text())))
+                widget.setReadOnly(not editing)
+
+    def reveal_passwords(self, visible):
+        mode = QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+        for key in ("password", "second_password"):
+            self.fields[key].setEchoMode(mode)
+            for _, widget in self.extra_widgets[key]:
+                widget.setEchoMode(mode)
+
+    def add_extra_field(self, key, value=""):
+        items = self.extra_widgets[key]
+        if len(items) >= 100:
+            raise VaultError("Можно добавить до 100 дополнительных полей каждого типа.")
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 6, 0, 0)
+        layout.addWidget(QLabel(f"{LABELS[key]} №{len(items) + 2}"))
+        widget = QLineEdit(value)
+        widget.setMaxLength(100_000)
+        if key in model.SECRET_FIELDS:
+            widget.setEchoMode(QLineEdit.EchoMode.Normal if self.reveal.isChecked() else QLineEdit.EchoMode.Password)
+        widget.textChanged.connect(self.mark_dirty)
+        layout.addWidget(widget)
+        if key in model.SECRET_FIELDS:
+            button("Копировать", lambda: self.copy_secret_value(widget.text()), layout)
+        self.field_groups[self.fields[key]][0].layout().addWidget(container)
+        items.append((container, widget))
+        widget.setReadOnly(not self.editing)
+        if not self.loading:
+            self.mark_dirty()
+            widget.setFocus()
+
+    def copy_secret_value(self, text):
+        QApplication.clipboard().setText(text)
+        self.clipboard_secret = text
+        self.clip_timer.start(300_000)
+
+    def paste_other_passwords(self):
+        if not self.leave_editor():
+            return
+        ids = self.session.mutate(lambda doc: model.paste_passwords(doc, QApplication.clipboard().text()))
+        self.clear_editor()
+        self.refresh_entries()
+        self.status.setText(f"Добавлено паролей: {len(ids)}")
 
     def edit_entry(self):
         if self.selected_id and not self.session.document["entries"][self.selected_id]["deleted_at"]:
@@ -692,9 +761,9 @@ class Window(QMainWindow):
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, data)
             if data in ("all", None, "other-passwords", "trash"):
-                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "key", "trash": "trash"}[data], icon_color))
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "asterisk", "trash": "trash"}[data], icon_color))
             if data in self.session.document["categories"]:
-                item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, "#9b87f5")))
+                item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, self.session.document["settings"].get("accent_color", "#8864cb"))))
                 item.setData(HAS_CHILDREN, data in has_children)
                 item.setData(COLLAPSED, data in self.collapsed_categories)
                 item.setToolTip(model.category_path(self.session.document, data))
@@ -766,9 +835,9 @@ class Window(QMainWindow):
             if entry.get("entry_type") == "password":
                 category_name = "Прочие пароли"
             item = QListWidgetItem(entry["title"])
-            badge = entry_icon(entry["title"])
+            badge = entry_icon("*" if entry.get("entry_type") == "password" else entry["title"], self.session.document["settings"].get("accent_color", "#8864cb"))
             item.setIcon(badge)
-            color = self.session.document["settings"].get("category_colors", {}).get(cid, "#9b87f5") if cid else None
+            color = self.session.document["settings"].get("category_colors", {}).get(cid, self.session.document["settings"].get("accent_color", "#8864cb")) if cid else None
             if category == "all" and color:
                 item.setForeground(QColor(color))
             item.setToolTip(category_name)
@@ -812,6 +881,10 @@ class Window(QMainWindow):
     def values(self):
         values = {**{key: widget.toPlainText() if isinstance(widget, QTextEdit) else widget.text() for key, widget in self.fields.items()},
                 "category": self.record_category.currentData()}
+        values["old_passwords"] = ""
+        additional = {key: [widget.text() for _, widget in items] for key, items in self.extra_widgets.items() if items}
+        if additional:
+            values["additional_fields"] = additional
         if self.password_only:
             values.update(entry_type="password", category=None, title=model.password_title(values["note"]))
         return values
@@ -820,12 +893,24 @@ class Window(QMainWindow):
         self.loading = True
         self.password_only = values.get("entry_type") == "password"
         self.reveal.setChecked(False)
+        for items in self.extra_widgets.values():
+            for container, widget in items:
+                widget.clear()
+                container.setParent(None)
+                container.deleteLater()
+            items.clear()
         for reveal in self.secret_reveals.values():
             reveal.setChecked(False)
         for key, widget in self.fields.items():
             widget.setPlainText(values.get(key, "")) if isinstance(widget, QTextEdit) else widget.setText(values.get(key, ""))
             if key in model.SUGGESTION_FIELDS:
                 widget.completer().model().setStringList(model.suggestions(self.session.document, key))
+        additional = model.additional_fields(values)
+        for key, items in additional.items():
+            for value in items:
+                self.add_extra_field(key, value)
+        self.advanced.setChecked(bool(values.get("second_password") or any(additional.values())))
+        self.reveal_passwords(False)
         self.record_category.setCurrentIndex(max(0, self.record_category.findData(values.get("category"))))
         self.editor_heading.setText(values.get("title") or ("Прочий пароль" if self.password_only else "Новая запись"))
         deleted = bool(values.get("deleted_at"))
@@ -960,7 +1045,7 @@ class Window(QMainWindow):
         cid = item.data(Qt.ItemDataRole.UserRole) if item else None
         if cid not in self.session.document["categories"] or not self.leave_editor():
             return
-        color = QColorDialog.getColor(QColor(self.session.document["settings"].get("category_colors", {}).get(cid, "#9b87f5")), self, "Цвет категории")
+        color = QColorDialog.getColor(QColor(self.session.document["settings"].get("category_colors", {}).get(cid, self.session.document["settings"].get("accent_color", "#8864cb"))), self, "Цвет категории")
         if color.isValid() and self.session.unlocked:
             self.session.mutate(lambda doc: doc["settings"].setdefault("category_colors", {}).update({cid: color.name()}))
             self.refresh_categories()
@@ -996,6 +1081,10 @@ class Window(QMainWindow):
                 widget.completer().popup().hide()
                 widget.completer().model().setStringList([])
             widget.clear()
+        for items in self.extra_widgets.values():
+            for _, widget in items:
+                widget.clear()
+            items.clear()
         # Nested modal event loops must not keep secrets visible after session lock.
         for dialog in self.findChildren(QDialog):
             for widget in dialog.findChildren(QLineEdit):
@@ -1179,7 +1268,7 @@ class Window(QMainWindow):
             if index < 0: return
             value = variants[dots[index]]
             if isinstance(value, dict) and "title" in value:
-                text = "\n\n".join(f"{label}: {('••••••' if field in model.SECRET_FIELDS and not reveal.isChecked() else value.get(field, ''))}" for field, label in LABELS.items())
+                text = "\n\n".join(f"{label}: {('••••••' if field in model.SECRET_FIELDS and not reveal.isChecked() else content)}" for field, label, content in model.display_fields(value, LABELS))
             elif isinstance(value, dict):
                 text = "Окончательно удалено: " + value["purged_at"]
             else:
@@ -1261,7 +1350,24 @@ class Window(QMainWindow):
         minutes = NumberInput()
         minutes.setRange(1, 1440)
         minutes.setValue(values["lock_minutes"])
-        general.addRow("Тема", theme)
+        customization = QLabel("Кастомизация")
+        customization.setObjectName("sectionHeading")
+        layout.addWidget(customization)
+        appearance = QFormLayout()
+        appearance.addRow("Тема", theme)
+        accent = QPushButton(values.get("accent_color", "#8864cb"))
+        accent.setObjectName("settingsAccent")
+        def choose_accent():
+            color = QColorDialog.getColor(QColor(accent.text()), dialog, "Основной цвет интерфейса")
+            if color.isValid():
+                accent.setText(color.name())
+                accent.setStyleSheet(f"border: 2px solid {color.name()};")
+        accent.clicked.connect(choose_accent)
+        appearance.addRow("Основной цвет", accent)
+        reset_accent = QPushButton("Фиолетовый по умолчанию")
+        reset_accent.clicked.connect(lambda: accent.setText("#8864cb"))
+        appearance.addRow("", reset_accent)
+        layout.addLayout(appearance)
         general.addRow("Автоблокировка, минут", minutes)
         close_action = QComboBox()
         close_action.setObjectName("closeActionSetting")
@@ -1323,10 +1429,12 @@ class Window(QMainWindow):
                 return
             from .vault_names import validate_name
             vault_name = validate_name(name.text())
-            self.session.mutate(lambda doc: doc["settings"].update(vault_name=vault_name, theme=theme.currentData(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
+            self.session.mutate(lambda doc: doc["settings"].update(vault_name=vault_name, theme=theme.currentData(), accent_color=accent.text(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
             self.preferences.save_close_action(close_action.currentData())
             self.cloud.reset_schedule()
             self.apply_theme()
+            self.refresh_categories()
+            self.refresh_entries()
             self.vault_title.setText(vault_name)
             dialog.accept()
         button("Сохранить", lambda: self.safe(save_settings), layout).setObjectName("primary")
@@ -1385,14 +1493,14 @@ class Window(QMainWindow):
         QGuiApplication.styleHints().setColorScheme({"system": Qt.ColorScheme.Unknown, "light": Qt.ColorScheme.Light, "dark": Qt.ColorScheme.Dark}[theme])
         dark = theme == "dark" or (theme == "system" and QGuiApplication.styleHints().colorScheme() != Qt.ColorScheme.Light)
         self._dark_theme = dark
-        self.setStyleSheet(stylesheet(dark))
+        self.setStyleSheet(stylesheet(dark, self.session.document["settings"].get("accent_color", "#8864cb")))
         self.theme_button.setIcon(navigation_icon("sun" if dark else "moon", "#a09cb0" if dark else "#706a7c"))
         muted = "#a09cb0" if dark else "#706a7c"
         for index in range(self.categories.count()):
             item = self.categories.item(index)
             kind = item.data(Qt.ItemDataRole.UserRole)
             if kind in ("all", None, "other-passwords", "trash"):
-                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "key", "trash": "trash"}[kind], muted))
+                item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "asterisk", "trash": "trash"}[kind], muted))
             elif kind == "category-heading":
                 item.setForeground(QColor(muted))
 

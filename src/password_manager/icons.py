@@ -7,6 +7,7 @@ from PySide6.QtSvg import QSvgRenderer
 
 
 PATHS = {
+    "asterisk": '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9"/>',
     "key": '<circle cx="8" cy="15" r="5"/><path d="m12 11 8-8m-3 3 3 3m-6 0 3 3"/>',
     "folder": '<path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3z"/>',
     "trash": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>',
@@ -25,15 +26,16 @@ def navigation_icon(name, color="#a09cb0"):
     return QIcon(pixmap)
 
 
-def entry_icon(title):
+def entry_icon(title, accent="#8864cb"):
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor("#373047"))
+    color = QColor(accent)
+    painter.setBrush(color.darker(240))
     painter.drawRoundedRect(QRectF(1, 1, 62, 62), 14, 14)
-    painter.setPen(QColor("#d4c0fa"))
+    painter.setPen(color.lighter(165))
     font = QFont("Segoe UI")
     font.setPixelSize(30)
     font.setWeight(QFont.Weight.DemiBold)

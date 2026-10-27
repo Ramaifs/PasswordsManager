@@ -2,9 +2,9 @@
 
 Адрес проекта: https://password-manager-vault.masaoyhs.workers.dev.
 
-2026-10-27 опубликована пересборка 0.40 с поиском по содержимому записей и телефону, разделом «Прочие пароли», автоподстановкой контактных данных, сортировкой и дополнительными полями паролей. Worker version ID: `fb034907-f439-417c-a077-526268dc6fa0`. Все 22 публичных файла проверены по SHA-256 на совпадение с текущим `web/password-manager/dist`. Серверный маршрут `/api/google/config` ответил HTTP 200, `enabled: true`, Client ID совпадает с конфигурацией сайта. Живой вход в Google этой проверкой не выполнялся.
+2026-10-27 опубликована версия 0.41: настройка темы и основного цвета, дополнительные нумерованные поля, единый показ паролей, перенос старых паролей и массовая вставка в «Прочие пароли». Worker version ID: `33ff7c71-1b79-4e31-b8bb-a9b03513b20f`. Все 23 публичных файла проверены по SHA-256 на совпадение с текущим `web/password-manager/dist`. Серверный маршрут `/api/google/config` ответил HTTP 200, `enabled: true`, Client ID совпадает с конфигурацией сайта. Живой вход в Google этой проверкой не выполнялся.
 
-Публикация выполнена через существующую конфигурацию `deployment/cloudflare-worker/wrangler.jsonc`, с сохранением KV binding и секретов. Локальный архив актуальных файлов: `releases/0.40/PasswordManager-web-0.40.zip`. Результаты: `artifacts/cloudflare-public-check.json`, `artifacts/cloudflare-google-config-check.json` и [протокол пересборки](category-navigation-verification.md).
+Публикация выполнена через существующую конфигурацию `deployment/cloudflare-worker/wrangler.jsonc`, с сохранением KV binding и секретов. Локальный архив актуальных файлов: `releases/0.41/PasswordManager-web-0.41.zip`. Результаты: `artifacts/cloudflare-public-check.json`, `artifacts/cloudflare-google-config-check.json` и [протокол 0.41](verification-0.41.md).
 
 ## Ограничение доступа
 

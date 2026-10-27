@@ -27,7 +27,7 @@ class CloudCopiesDialog(QDialog):
         if latest:
             heading = QLabel("Последнее открытое хранилище")
             heading.setObjectName("lastOpenedHeading")
-            heading.setStyleSheet("color:#9b87f5; font-weight:600; font-size:14px;")
+            heading.setProperty("accentHeading", True)
             rows.addWidget(heading)
             self.add_copy(rows, latest, pinned=True)
         if others:
@@ -48,7 +48,7 @@ class CloudCopiesDialog(QDialog):
         row.setObjectName("lastOpenedCopy" if pinned else "cloudCopy")
         row.setProperty("copyId", copy["id"])
         if pinned:
-            row.setStyleSheet("QFrame#lastOpenedCopy { border:1px solid #9b87f5; border-radius:10px; background:rgba(155,135,245,30); } QFrame#lastOpenedCopy QLabel { background:transparent; border:none; }")
+            row.setProperty("accentPanel", True)
         line = QHBoxLayout(row)
         labels = QVBoxLayout()
         for value in [copy.get("vaultName") or copy.get("name") or "Хранилище", display_time(copy), copy.get("name", "")]:
@@ -120,7 +120,8 @@ class CloudPreviewDialog(QDialog):
             return
         entry = self.records[index]
         labels = [("title", "Название"), ("site", "Сайт"), ("username", "Логин"), ("email", "Почта"), ("phone", "Телефон"), ("password", "Пароль"), ("second_password", "Второй пароль (2FA)"), ("old_passwords", "Старые пароли"), ("note", "Заметка")]
-        lines = [label + ": " + ("••••••" if field in model.SECRET_FIELDS and not self.reveal.isChecked() else entry.get(field, "")) for field, label in labels]
+        labels = dict((field, label) for field, label in labels if field != "old_passwords")
+        lines = [label + ": " + ("••••••" if field in model.SECRET_FIELDS and not self.reveal.isChecked() else value) for field, label, value in model.display_fields(entry, labels)]
         lines.append("Категория: " + (model.category_path(self.document, entry["category"]) if entry["category"] else "Без категории"))
         self.details.setPlainText("\n\n".join(lines))
 

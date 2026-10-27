@@ -1,3 +1,4 @@
+import { EXTRA_FIELDS, FIELD_LABELS, additionalFields, migrateOldPasswords, splitPasswords } from './additional-fields.js';
 import { sortEntries, savedEntryOrder, rememberEntryOrder } from './entry-order.js';
 import { matchesEntry } from './search.js';
 import { suggestions, SUGGESTION_FIELDS } from './suggestions.js';
@@ -82,7 +83,7 @@ function savedStatus() { return state.record?.cloudPending ? 'Есть изме�
 const helpButton = `<button class="icon-button quiet" data-action="help" aria-label="Как это работает">${icon('help')}</button>`;
 function brand() { return '<div class="brand"><img src="./icon.svg" alt=""><div>Password Manager<small>ЛИЧНОЕ ПРОСТРАНСТВО</small></div></div>'; }
 function sidebar() {
-  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<div class="vault-item"><button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button><button class="danger vault-delete" data-action="delete-vault" data-id="${esc(v.id)}" aria-label="Удалить хранилище ${esc(v.name)}">${icon('trash')}</button></div>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">WEB · 0.40</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
+  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<div class="vault-item"><button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button><button class="danger vault-delete" data-action="delete-vault" data-id="${esc(v.id)}" aria-label="Удалить хранилище ${esc(v.name)}">${icon('trash')}</button></div>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">WEB · 0.41</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
 }
 function shell(content, page = 'Хранилища') {
   app.innerHTML = `<div class="layout">${sidebar()}<main class="main"><header class="topbar"><div class="breadcrumb">${icon('vault')}<span>Ваше пространство</span><span>/</span><span>${esc(page)}</span></div><div class="top-status"><span class="status-dot"></span>Локальное шифрование</div></header>${content}<footer class="bottom-line"><span>Ваши пароли. Только ваш доступ.</span><span>Argon2id · AES-256-GCM</span></footer></main></div>`;
@@ -130,6 +131,7 @@ async function flushFile(record) {
 async function hash(bytes) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(v => v.toString(16).padStart(2, '0')).join(''); }
 async function persist(document, metadataOnly = false) {
   const token = state.token, generation = state.generation;
+  migrateOldPasswords(document);
   const staged = await rpc('update', { token, document });
   try {
     const saved = await saveSnapshot(state.record, staged.blob, metadataOnly);
@@ -159,27 +161,39 @@ async function finishCreate() {
   showModal('Хранилище создано', '<p>Выберите, куда сохранить зашифрованную копию. До сохранения не закрывайте вкладку.</p><div class="modal-actions"><button class="secondary" data-action="save-file">Сохранить файл</button><button class="primary" data-action="drive-settings">Сохранить в Google Drive</button></div>');
 }
 function visibleEntries() {
-  return sortEntries(Object.values(state.doc.entries).filter(e => !!e.deleted_at === (state.category === 'trash') && (['all', 'trash'].includes(state.category) || (state.category === 'other-passwords' ? e.entry_type === 'password' : state.category === 'none' ? e.category === null : descendants(state.doc, state.category).has(e.category))) && matchesEntry(e, state.query)), state.entrySort);
+  return sortEntries(Object.values(state.doc.entries).filter(e => !!e.deleted_at === (state.category === 'trash') && (['all', 'trash'].includes(state.category) || (state.category === 'other-passwords' ? e.entry_type === 'password' : state.category === 'none' ? e.category === null && e.entry_type !== 'password' : descendants(state.doc, state.category).has(e.category))) && matchesEntry(e, state.query)), state.entrySort);
 }
 function otherPasswordsLink() {
-  return `<button class="nav-link ${state.category === 'other-passwords' ? 'active' : ''}" data-action="filter" data-id="other-passwords" title="Прочие пароли">${icon('key')}<span>Прочие пароли</span></button>`;
+  return `<button class="nav-link ${state.category === 'other-passwords' ? 'active' : ''}" data-action="filter" data-id="other-passwords" title="Прочие пароли"><span class="asterisk" aria-hidden="true">*</span><span>Прочие пароли</span></button>`;
 }
 function workspaceSidebar() {
   const doc = state.doc, active = Object.values(doc.entries).filter(e => !e.deleted_at).length, trash = Object.values(doc.entries).filter(e => e.deleted_at).length;
-  return `<aside class="sidebar">${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || '#9b87f5')}"></i><span>${depth ? '• ' : ''}${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.40</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
+  return `<aside class="sidebar">${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}"></i><span>${depth ? '• ' : ''}${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.41</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
 }
 function recordList() {
   const entries = visibleEntries();
   return entries.length ? entries.map(e => {
     const category = e.entry_type === 'password' ? 'Прочие пароли' : state.doc.categories[e.category] || 'Без категории';
-    const color = e.category ? state.doc.settings.category_colors?.[e.category] || '#9b87f5' : '';
-    return `<button class="record ${e.id === state.selected ? 'active' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${esc(initials(e.title))}</span><span><strong ${color && state.category === 'all' ? `data-entry-color="${esc(color)}"` : ''}>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small>${state.category === 'all' ? `<small class="record-category">${esc(category)}</small>` : ''}</span></button>`;
+    const color = e.category ? state.doc.settings.category_colors?.[e.category] || state.doc.settings.accent_color || '#8864cb' : '';
+    return `<button class="record ${e.id === state.selected ? 'active' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${e.entry_type === 'password' ? '*' : esc(initials(e.title))}</span><span><strong ${color && state.category === 'all' ? `data-entry-color="${esc(color)}"` : ''}>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small>${state.category === 'all' ? `<small class="record-category">${esc(category)}</small>` : ''}</span></button>`;
   }).join('') : `<div class="empty-state"><p>${state.query ? 'Ничего не найдено.<br>Попробуйте другой запрос.' : state.category === 'trash' ? 'В корзине пока пусто.' : 'Здесь пока нет записей.'}</p></div>`;
 }
 function applyEntryColors() {
   document.querySelectorAll('[data-entry-color]').forEach(node => { node.style.color = node.dataset.entryColor; });
 }
+function applyAppearance() {
+  const settings = state.doc?.settings || {theme:'system'};
+  document.documentElement.dataset.theme = settings.theme === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : settings.theme;
+  const accent = settings.accent_color || '#8864cb';
+  const style = document.documentElement.style;
+  style.setProperty('--accent', accent);
+  style.setProperty('--accent-hover', `color-mix(in srgb, ${accent} 80%, var(--text))`);
+  style.setProperty('--hover', `color-mix(in srgb, ${accent} 18%, var(--bg))`);
+  const rgb = accent.slice(1).match(/../g).map(value => parseInt(value, 16));
+  style.setProperty('--accent-ink', rgb[0]*.299 + rgb[1]*.587 + rgb[2]*.114 < 153 ? '#fff' : '#17171b');
+}
 function workspace() {
+  applyAppearance();
   state.view = 'workspace'; document.title = state.record.name + ' — Password Manager';
   app.innerHTML = `<div class="workspace ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<section class="entry-column"><div class="entry-toolbar"><div class="entry-toolbar-top"><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div><label class="entry-sort-label" for="entry-sort">Сортировка<select id="entry-sort"><option value="title" ${state.entrySort === 'title' ? 'selected' : ''}>По алфавиту (А–Я)</option><option value="updated" ${state.entrySort === 'updated' ? 'selected' : ''}>По изменению (сначала новые)</option></select></label></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
   document.querySelectorAll('[data-category-color]').forEach(node => { node.style.backgroundColor = node.dataset.categoryColor; });
@@ -188,7 +202,7 @@ function workspace() {
   renderEditor();
 }
 function listActions() {
-  if (state.category !== 'trash') return `<button class="icon-button quiet" data-action="new-entry" aria-label="Новая запись">${icon('plus')}</button>`;
+  if (state.category !== 'trash') return `${state.category === 'other-passwords' ? '<button class="quiet small" data-action="paste-passwords">Вставить пароли</button>' : ''}<button class="icon-button quiet" data-action="new-entry" aria-label="Новая запись">${icon('plus')}</button>`;
   const count = Object.values(state.doc.entries).filter(entry => entry.deleted_at).length;
   return `<button class="danger secondary small" data-action="empty-trash" ${count ? '' : 'disabled'}>Очистить корзину</button>`;
 }
@@ -199,41 +213,38 @@ function renderEditor(draft) {
   const values = entry || Object.fromEntries([...FIELDS.map(f => [f, '']), ['category', Object.hasOwn(state.doc.categories, state.category) ? state.category : null]]);
   const viewing = !!entry && !state.editingEntry;
   const passwordOnly = entry ? entry.entry_type === 'password' : state.category === 'other-passwords';
-  const labels = { title: 'Название', site: 'Сайт', username: 'Логин', email: 'Почта', phone: 'Телефон', password: 'Пароль', second_password: 'Второй пароль (2FA)', old_passwords: 'Старые пароли', note: 'Заметка', show: 'Показать', copy: 'Копировать' };
-  const input = (key, placeholder) => `<div class="field"><label for="entry-${key}">${labels[key]}</label><input id="entry-${key}" name="${key}" value="${esc(values[key])}" placeholder="${placeholder}" autocomplete="off" maxlength="100000" ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''} ${key === 'title' ? 'required' : ''}>${SUGGESTION_FIELDS.includes(key) ? `<datalist id="suggest-${key}">${suggestions(state.doc, key).map(value => `<option value="${esc(value)}"></option>`).join('')}</datalist>` : ''}</div>`;
-  const secretField = (key, label) => `<div class="field"><label for="entry-${key}">${label}</label><div class="password-input"><input id="entry-${key}" name="${key}" type="password" value="${esc(values[key] || '')}" autocomplete="new-password" maxlength="100000"><button type="button" class="icon-button quiet" data-action="reveal" data-target="entry-${key}" aria-label="${esc(label)}: ${labels.show}">${icon('eye')}</button></div><div class="password-buttons"><button type="button" data-action="copy-secret" data-target="entry-${key}">${icon('copy')}${labels.copy}</button></div></div>`;
-  target.innerHTML = `<header class="editor-top"><button class="mobile-menu" data-action="back-list">${icon('back')}Все записи</button><span class="save-state">${entry?.deleted_at ? 'В корзине' : savedStatus()}</span><div class="editor-actions"><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div></header><form id="entry-form" class="editor-content"><div class="editor-heading"><span class="record-badge">${entry ? esc(initials(entry.title)) : icon('plus')}</span><div><h1>${entry ? esc(entry.title) : 'Новая запись'}</h1><p>${entry ? esc(entry.site || 'Учётные данные') : 'Добавьте аккаунт в ваше хранилище'}</p></div></div>${input('title', 'Например, Почта')}${input('site', 'example.com')}<div class="field-grid">${input('username', 'Имя пользователя')}${input('email', 'you@example.com')}</div>${input('phone', 'Необязательно')}<div class="field"><label for="entry-password">Пароль</label><div class="password-input"><input id="entry-password" name="password" type="password" value="${esc(values.password)}" placeholder="Пароль аккаунта" autocomplete="new-password" maxlength="100000"><button type="button" class="icon-button quiet" data-action="reveal" data-target="entry-password" aria-label="Показать пароль">${icon('eye')}</button></div><div class="password-buttons"><button type="button" data-action="copy-password">${icon('copy')}Копировать</button><button type="button" data-action="generate-entry">${icon('dice')}Сгенерировать</button></div></div>${secretField('second_password', labels.second_password)}${secretField('old_passwords', labels.old_passwords)}<div class="field"><label for="entry-category">Категория</label><select id="entry-category" name="category"><option value="">Без категории</option>${categoryRows(state.doc).map(({id, path: name}) => `<option value="${esc(id)}" ${values.category === id ? 'selected' : ''}>${esc(name)}</option>`).join('')}</select></div><div class="field"><label for="entry-note">Заметка</label><textarea id="entry-note" name="note" placeholder="Дополнительная информация" maxlength="100000">${esc(values.note)}</textarea></div><p id="form-error" class="form-error"></p><div class="editor-bottom">${entry?.deleted_at ? '<button class="quiet" type="button" data-action="restore-entry">Восстановить</button><button class="danger secondary" type="button" data-action="purge-entry">Удалить навсегда</button>' : `<button class="quiet ${entry ? 'danger' : ''}" type="button" data-action="${entry ? 'trash-entry' : 'cancel-entry'}">${entry ? 'В корзину' : 'Отмена'}</button><button class="primary" type="submit">Сохранить</button>`}</div></form>`;
-  target.querySelector('#entry-form').dataset.entryType = passwordOnly ? 'password' : 'account';
-  if (passwordOnly) {
-    target.querySelector('.editor-heading p').textContent = 'Пароль и заметка';
-    target.querySelectorAll('.field').forEach(field => {
-      const control = field.querySelector('input,textarea,select');
-      if (!['password', 'note'].includes(control.name)) {
-        field.hidden = true;
-        field.querySelectorAll('input,textarea,select').forEach(node => { node.disabled = true; });
-      }
-    });
-    target.querySelector('#entry-password').required = true;
+  const extra = additionalFields(values);
+  const advanced = !!values.second_password || Object.values(extra).some(items => items.length);
+  const editable = !viewing && !entry?.deleted_at;
+  const field = (key, value, index = null) => {
+    const secret = ['password', 'second_password'].includes(key);
+    const id = index === null ? `entry-${key}` : `entry-${key}-${index}`;
+    const label = FIELD_LABELS[key] + (index === null ? '' : ` №${index + 2}`);
+    return `<div class="field ${key === 'second_password' || index !== null ? 'advanced-field' : ''}" ${!advanced && (key === 'second_password' || index !== null) ? 'hidden' : ''}><label for="${id}">${label}${index === null && EXTRA_FIELDS.includes(key) && editable && !passwordOnly ? `<button type="button" class="add-field" data-action="add-field" data-field="${key}" aria-label="Добавить: ${label}" ${advanced ? '' : 'hidden'}>+</button>` : ''}</label><input id="${id}" ${index === null ? `name="${key}"` : `data-extra-field="${key}"`} type="${secret ? 'password' : 'text'}" value="${esc(value || '')}" autocomplete="off" maxlength="100000" ${editable ? '' : 'readonly'} ${key === 'title' ? 'required' : ''} ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">${icon('copy')}Копировать</button>${key === 'password' && index === null && editable ? '<button type="button" data-action="generate-entry">Сгенерировать</button>' : ''}</div>` : ''}</div>`;
+  };
+  const fields = (passwordOnly ? ['password', 'note'] : Object.keys(FIELD_LABELS)).map(key => {
+    if (key === 'note') return `<div class="field" ${!editable && !values.note ? 'hidden' : ''}><label for="entry-note">Заметка</label><textarea id="entry-note" name="note" maxlength="100000" ${editable ? '' : 'readonly'}>${esc(values.note)}</textarea></div>`;
+    if (!editable && !values[key] && !(extra[key] || []).some(Boolean)) return '';
+    return `<div data-field-group="${key}">${field(key, values[key])}${(extra[key] || []).map((value, index) => field(key, value, index)).join('')}</div>`;
+  }).join('');
+  target.innerHTML = `<header class="editor-top"><button class="mobile-menu" data-action="back-list">${icon('back')}Все записи</button><span class="save-state">${entry?.deleted_at ? 'В корзине' : savedStatus()}</span><div class="editor-actions"><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div></header><form id="entry-form" class="editor-content" data-entry-type="${passwordOnly ? 'password' : 'account'}"><div class="editor-heading"><span class="record-badge">${passwordOnly ? '*' : entry ? esc(initials(entry.title)) : icon('plus')}</span><div><h1>${entry ? esc(entry.title) : passwordOnly ? 'Прочий пароль' : 'Новая запись'}</h1><p>${passwordOnly ? 'Пароль и заметка' : 'Учётные данные'}</p></div></div>${fields}${passwordOnly ? '' : `<div class="field"><label for="entry-category">Категория</label><select id="entry-category" name="category" ${editable ? '' : 'disabled'}><option value="">Без категории</option>${categoryRows(state.doc).map(({id, path}) => `<option value="${esc(id)}" ${values.category === id ? 'selected' : ''}>${esc(path)}</option>`).join('')}</select></div>`}<div class="entry-options"><label><input type="checkbox" id="entry-reveal">Показать пароль</label>${passwordOnly ? '' : `<button type="button" class="advanced-options" data-action="advanced-options" aria-pressed="${advanced}">Продвинутые настройки</button>`}</div><p id="form-error" class="form-error"></p><div class="editor-bottom">${entry?.deleted_at ? '<button class="quiet" type="button" data-action="restore-entry">Восстановить</button><button class="danger secondary" type="button" data-action="purge-entry">Удалить навсегда</button>' : `<button class="quiet ${entry ? 'danger' : ''}" type="button" data-action="${entry ? 'trash-entry' : 'cancel-entry'}">${entry ? 'В корзину' : 'Отмена'}</button><button class="primary" type="${viewing ? 'button' : 'submit'}" ${viewing ? 'data-action="edit-entry"' : ''}>${viewing ? 'Редактировать' : 'Сохранить'}</button>`}</div></form>`;
+  for (const key of SUGGESTION_FIELDS) {
+    const list = document.createElement('datalist'); list.id = `suggest-${key}`;
+    for (const value of suggestions(state.doc, key)) { const option = document.createElement('option'); option.value = value; list.append(option); }
+    target.querySelector('form').append(list);
   }
-  if (viewing || entry?.deleted_at) {
-    target.querySelectorAll('.field').forEach(field => {
-      const control = field.querySelector('input,textarea,select');
-      field.hidden = (passwordOnly && !['password', 'note'].includes(control.name)) || !control.value.trim();
-    });
-    target.querySelectorAll('.field-grid').forEach(grid => { grid.hidden = [...grid.children].every(field => field.hidden); });
-    target.querySelectorAll('input,textarea').forEach(node => { node.readOnly = true; });
-    target.querySelectorAll('select').forEach(node => { node.disabled = true; });
-    target.querySelector('[data-action="generate-entry"]').hidden = true;
-    const save = target.querySelector('[type="submit"]');
-    if (save) { save.type = 'button'; save.dataset.action = 'edit-entry'; save.textContent = 'Редактировать'; }
-  }
-  if (entry?.deleted_at) target.querySelectorAll('input,textarea,select').forEach(node => { node.disabled = true; });
-  target.querySelectorAll('.field-grid').forEach(grid => { grid.hidden = [...grid.children].every(field => field.hidden); });
-  if (state.editingNew) document.querySelector(passwordOnly ? '#entry-password' : '#entry-title').focus();
+  target.querySelector('#entry-reveal').addEventListener('change', event => {
+    target.querySelectorAll('[name="password"],[name="second_password"],[data-extra-field="password"],[data-extra-field="second_password"]').forEach(node => { node.type = event.target.checked ? 'text' : 'password'; });
+  });
+  if (passwordOnly) target.querySelector('#entry-password').required = true;
+  if (state.editingNew) target.querySelector(passwordOnly ? '#entry-password' : '#entry-title').focus();
 }
 function editorValues() {
   const form = document.querySelector('#entry-form'); if (!form) return null;
   const data = new FormData(form), values = Object.fromEntries(FIELDS.map(f => [f, String(data.get(f) || '')])); values.category = data.get('category') || null;
+  const additional = {};
+  form.querySelectorAll('[data-extra-field]').forEach(node => { (additional[node.dataset.extraField] ||= []).push(node.value); });
+  if (Object.keys(additional).length) values.additional_fields = additional;
   if (form.dataset.entryType === 'password') { values.entry_type = 'password'; values.category = null; values.title = passwordTitle(values.note); }
   return values;
 }
@@ -316,6 +327,7 @@ async function doUnlock() {
   }
   state.record = await flushFile(state.record);
   state.token = result.token; state.doc = result.document;
+  if ([...Object.values(state.doc.entries), ...Object.values(state.doc.drafts)].some(record => record.old_passwords)) await persist(clone(state.doc), true);
   if (state.doc.settings.vault_name) state.record = await putVault({ ...state.record, name: state.doc.settings.vault_name }); state.category = 'all'; state.query = ''; state.selected = null; state.editingNew = false; state.dirty = false; lastActivity = Date.now();
   if (state.record.drive && state.doc.sync?.pending) state.record = await putVault({ ...state.record, cloudPending: true });
   if (state.record.wire) {
@@ -336,7 +348,7 @@ function generator(intoEditor = false) {
 }
 function categoryDialog(id = '', defaultParent = '') {
   const name = state.doc.categories[id] || '';
-  showModal(id ? 'Категория' : 'Новая категория', `<form id="category-form" class="form" data-id="${esc(id)}"><div class="field"><label for="category-name">Название</label><input id="category-name" name="name" value="${esc(name)}" maxlength="256" required></div><div class="field"><label for="category-parent">Родительская категория</label><select id="category-parent"><option value="">Без родителя</option>${categoryRows(state.doc).filter(row => !id || !descendants(state.doc, id).has(row.id)).map(row => `<option value="${esc(row.id)}" ${(state.doc.category_parents?.[id] || defaultParent) === row.id ? 'selected' : ''}>${esc(row.path)}</option>`).join('')}</select></div><div class="field"><label for="category-color">Цвет</label><input id="category-color" type="color" value="${esc(state.doc.settings.category_colors?.[id] || '#9b87f5')}"></div><p id="form-error" class="form-error"></p><div class="modal-actions">${id ? `<button type="button" class="secondary" data-action="add-subcategory" data-id="${esc(id)}">Создать подкатегорию</button><button type="button" class="danger secondary" data-action="delete-category" data-id="${esc(id)}">Удалить категорию</button>` : ''}<button class="primary" type="submit">${id ? 'Сохранить' : 'Создать категорию'}</button></div></form>`);
+  showModal(id ? 'Категория' : 'Новая категория', `<form id="category-form" class="form" data-id="${esc(id)}"><div class="field"><label for="category-name">Название</label><input id="category-name" name="name" value="${esc(name)}" maxlength="256" required></div><div class="field"><label for="category-parent">Родительская категория</label><select id="category-parent"><option value="">Без родителя</option>${categoryRows(state.doc).filter(row => !id || !descendants(state.doc, id).has(row.id)).map(row => `<option value="${esc(row.id)}" ${(state.doc.category_parents?.[id] || defaultParent) === row.id ? 'selected' : ''}>${esc(row.path)}</option>`).join('')}</select></div><div class="field"><label for="category-color">Цвет</label><input id="category-color" type="color" value="${esc(state.doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}"></div><p id="form-error" class="form-error"></p><div class="modal-actions">${id ? `<button type="button" class="secondary" data-action="add-subcategory" data-id="${esc(id)}">Создать подкатегорию</button><button type="button" class="danger secondary" data-action="delete-category" data-id="${esc(id)}">Удалить категорию</button>` : ''}<button class="primary" type="submit">${id ? 'Сохранить' : 'Создать категорию'}</button></div></form>`);
   document.querySelector('#category-name').focus();
 }
 function syncSettingsFields() {
@@ -345,7 +357,7 @@ function syncSettingsFields() {
 }
 function settings() {
   const status = !connected() || !state.record.drive ? ['не подключен', 'disconnected'] : state.record.cloudPending || state.doc.sync?.pending ? ['Требует синхронизации', 'pending'] : ['Подключен', 'connected'];
-  showModal('Настройки хранилища', `<form id="settings-form" class="form"><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Сохранить файл на ПК</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить хранилище</button><p class="storage-summary">До сохранения в файл или Google Drive данные существуют в памяти вкладки.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
+  showModal('Настройки хранилища', `<form id="settings-form" class="form"><h3>Кастомизация</h3><div class="field"><label for="settings-accent">Основной цвет интерфейса</label><input id="settings-accent" name="accent_color" type="color" value="${esc(state.doc.settings.accent_color || '#8864cb')}"><button type="button" data-action="reset-accent">Фиолетовый по умолчанию</button></div><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Сохранить файл на ПК</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить хранилище</button><p class="storage-summary">До сохранения в файл или Google Drive данные существуют в памяти вкладки.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
 }
 async function commitSyncStage(staged) {
   try {
@@ -420,7 +432,9 @@ function showConflicts() {
   const all = state.doc.sync ? conflicts(state.doc.sync.state) : {};
   showModal('Конфликты', Object.keys(all).length ? Object.entries(all).map(([key, variants]) => `<div class="notice"><strong>${esc(key.startsWith('category_color:') ? 'Цвет категории: ' + (state.doc.categories[key.split(':')[1]] || 'Удалённая категория') : key)}</strong>${Object.entries(variants).map(([dot, value], n) => {
     const hiddenId = 'conflict-' + dot.replaceAll(':', '-');
-    const extraSecrets = [['second_password', 'Второй пароль (2FA)'], ['old_passwords', 'Старые пароли']].filter(([field]) => value?.[field]).map(([field, label]) => `<label>${label}</label><div class="password-input"><input id="${hiddenId}-${field}" type="password" value="${esc(value[field])}" readonly><button class="icon-button" data-action="reveal" data-target="${hiddenId}-${field}" aria-label="Показать: ${label}">${icon('eye')}</button></div>`).join('');
+    const extra = value && typeof value === 'object' ? additionalFields(value) : {};
+    const rows = [...(value?.second_password ? [['second_password', FIELD_LABELS.second_password, value.second_password]] : []), ...Object.entries(extra).flatMap(([field, items]) => items.map((text, index) => [field, `${FIELD_LABELS[field]} №${index + 2}`, text]))];
+    const extraSecrets = rows.map(([field, label, text], index) => `<label>${label}</label><input id="${hiddenId}-extra-${index}" ${['password', 'second_password'].includes(field) ? 'data-conflict-secret type="password"' : 'type="text"'} value="${esc(text)}" readonly>`).join('');
     return `<div class="backup-row"><div><p>${esc(typeof value === 'string' ? value : value === null ? (key.startsWith('category_color:') ? 'Цвет по умолчанию' : 'Категория удалена') : value.purged_at ? 'Запись удалена навсегда' : `${value.title}${value.deleted_at ? ' · В корзине' : ''}`)}</p>${value?.password !== undefined ? `<p>${esc(value.site)}<br>${esc(value.username)} · ${esc(value.email)}<br>${esc(value.phone)}<br>${esc(value.note)}<br>${esc(value.updated_at)}</p><div class="password-input"><input id="${hiddenId}" type="password" value="${esc(value.password)}" readonly><button class="icon-button" data-action="reveal" data-target="${hiddenId}" aria-label="Показать пароль">${icon('eye')}</button></div>${extraSecrets}` : ''}</div><button class="secondary small" data-action="drive-resolve" data-key="${esc(key)}" data-dot="${esc(dot)}">Выбрать ${n + 1}</button></div>`;
   }).join('')}</div>`).join('') : '<p>Конфликтов нет.</p>');
 }
@@ -508,7 +522,30 @@ const actions = {
   },
   'open-recent': async node => { const record = await getVault(node.dataset.id); if (!record) throw new Error('Хранилище не найдено на этом устройстве.'); await openRecord(record); },
   'unlock-recovery': async () => unlockScreen(state.record, 'recovery'), 'unlock-normal': async () => unlockScreen(state.record),
-  reveal: async node => { const input = document.getElementById(node.dataset.target); input.type = input.type === 'password' ? 'text' : 'password'; node.setAttribute('aria-label', input.type === 'password' ? 'Показать пароль' : 'Скрыть пароль'); },
+  'reset-accent': async () => { document.querySelector('#settings-accent').value = '#8864cb'; },
+  'advanced-options': async node => {
+    const enabled = node.getAttribute('aria-pressed') !== 'true'; node.setAttribute('aria-pressed', String(enabled));
+    document.querySelectorAll('#entry-form .advanced-field, #entry-form .add-field').forEach(field => { field.hidden = !enabled; });
+  },
+  'add-field': async node => {
+    const key = node.dataset.field, group = node.closest('[data-field-group]');
+    const index = group.querySelectorAll('[data-extra-field]').length;
+    if (index >= 100) throw new Error('Можно добавить до 100 дополнительных полей каждого типа.');
+    const secret = ['password','second_password'].includes(key), id = `entry-${key}-${index}`;
+    const container = document.createElement('div'); container.className = 'field advanced-field';
+    container.innerHTML = `<label for="${id}">${FIELD_LABELS[key]} №${index + 2}</label><input id="${id}" data-extra-field="${key}" type="${secret && !document.querySelector('#entry-reveal').checked ? 'password' : 'text'}" autocomplete="off" maxlength="100000" ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">Копировать</button></div>` : ''}`;
+    group.append(container); state.dirty = true; container.querySelector('input').focus();
+  },
+  'paste-passwords': async () => {
+    if (!await confirmLeave()) return;
+    const generation = state.generation;
+    let text; try { text = await navigator.clipboard.readText(); } catch { throw new Error('Разрешите доступ к буферу обмена в браузере.'); }
+    if (generation !== state.generation || !state.doc) return;
+    const values = splitPasswords(text), next = clone(state.doc);
+    for (const password of values) { const id = crypto.randomUUID(); next.entries[id] = {...Object.fromEntries(FIELDS.map(key => [key, ''])), entry_type:'password', title:passwordTitle(''), password, category:null, id, deleted_at:null, updated_at:now()}; }
+    await persist(next); state.selected = null; state.editingNew = false; state.dirty = false; workspace(); toast(`Добавлено паролей: ${values.length}`);
+  },
+  reveal: async node => { const input = document.getElementById(node.dataset.target); input.type = input.type === 'password' ? 'text' : 'password'; if (node.dataset.target.startsWith('conflict-')) node.closest('.backup-row').querySelectorAll('[data-conflict-secret]').forEach(field => { field.type = input.type; }); node.setAttribute('aria-label', input.type === 'password' ? 'Показать пароль' : 'Скрыть пароль'); },
   theme: async () => { const dark = document.documentElement.dataset.theme !== 'dark'; document.documentElement.dataset.theme = dark ? 'dark' : 'light'; if (state.doc) { const next = clone(state.doc); next.settings.theme = dark ? 'dark' : 'light'; await persist(next, true); } },
   help: async () => help(), 'close-modal': async () => closeModal(),
   lock,
@@ -634,6 +671,7 @@ document.addEventListener('submit', e => {
       const next = clone(state.doc), previousInterval = syncMinutes(next.settings);
       next.settings.lock_minutes = Number(new FormData(form).get('lock_minutes'));
       next.settings.vault_name = vaultName(new FormData(form).get('vault_name'));
+      next.settings.accent_color = new FormData(form).get('accent_color');
       next.settings.theme = new FormData(form).get('theme');
       next.settings.sync_minutes = document.querySelector('#sync-auto').checked ? Number(document.querySelector('#sync-minutes').value) : 0;
       if (!Number.isInteger(next.settings.sync_minutes) || next.settings.sync_minutes < (document.querySelector('#sync-auto').checked ? 1 : 0) || next.settings.sync_minutes > 1440) throw new Error('Интервал синхронизации: от 1 до 1440 минут, либо только вручную.');
