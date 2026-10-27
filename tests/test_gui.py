@@ -178,6 +178,72 @@ def test_category_sort_groups_paths_and_keeps_unsaved_editor(window):
     window.dirty = False
 
 
+def test_ctrl_shift_selection_bulk_actions_and_delete_only_selected(window, monkeypatch):
+    from password_manager import model
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    ids = window.session.mutate(lambda doc: [model.save_entry(doc, {'title':f'Fixture {index:02}'}) for index in range(5)])
+    category = window.session.mutate(lambda doc: model.category(doc, 'Batch category'))
+    window.refresh_categories()
+    window.refresh_entries()
+    window.show()
+    QApplication.processEvents()
+    viewport = window.entries.viewport()
+    def click(index, modifier=Qt.KeyboardModifier.NoModifier):
+        QTest.mouseClick(viewport, Qt.MouseButton.LeftButton, modifier, window.entries.visualItemRect(window.entries.item(index)).center())
+        QApplication.processEvents()
+    click(0)
+    click(2, Qt.KeyboardModifier.ControlModifier)
+    selected = lambda: {item.data(Qt.ItemDataRole.UserRole) for item in window.entries.selectedItems()}
+    assert selected() == {ids[0], ids[2]}
+    click(4, Qt.KeyboardModifier.ShiftModifier)
+    chosen = selected()
+    assert {ids[2], ids[3], ids[4]} <= chosen
+    window.change_entries(list(chosen), 'color', '#12ab34')
+    assert selected() == chosen
+    window.change_entries(list(chosen), 'category', category)
+    records = window.session.store.open(PASSWORD)[1]['entries']
+    assert all(records[eid].get('color') == '#12ab34' and records[eid]['category'] == category for eid in chosen)
+    assert all('color' not in records[eid] and records[eid]['category'] is None for eid in set(ids) - chosen)
+    monkeypatch.setattr(QMessageBox, 'question', lambda *args: QMessageBox.StandardButton.Yes)
+    menu = window.entry_menu(list(chosen))
+    next(action for action in menu.actions() if action.text() == 'Удалить пароли').trigger()
+    assert {eid for eid, record in window.session.document['entries'].items() if record['deleted_at']} == chosen
+
+
+def test_minus_removes_only_extra_field_renumbers_and_both_primary_copy_buttons_remain(window):
+    from PySide6.QtWidgets import QPushButton, QLabel
+    window.fields['title'].setText('Extra deletion fixture')
+    window.fields['password'].setText('PRIMARY-FIXTURE')
+    window.advanced.click()
+    for value in ['REMOVE-ME', 'KEEP-ME']:
+        window.add_extra_field('password', value)
+    first = window.extra_widgets['password'][0][0]
+    first.findChild(QPushButton, 'extraRemove').click()
+    assert len(window.extra_widgets['password']) == 1
+    container, control = window.extra_widgets['password'][0]
+    assert control.text() == 'KEEP-ME'
+    assert container.findChild(QLabel, 'extraFieldLabel').text() == 'Пароль №2'
+    assert window.copy_button.text() == 'Копировать пароль'
+    window.secret_copy_buttons['password'].click()
+    assert QApplication.clipboard().text() == 'PRIMARY-FIXTURE'
+    window.clear_clipboard()
+    window.save()
+    saved = window.session.store.open(PASSWORD)[1]['entries'][window.selected_id]
+    assert saved['additional_fields']['password'] == ['KEEP-ME']
+
+
+def test_extra_only_password_remains_visible_and_revealable(window):
+    window.fields['title'].setText('Additional secret only')
+    window.advanced.click()
+    window.add_extra_field('password', 'EXTRA-ONLY-FIXTURE')
+    window.save()
+    assert not window.field_groups[window.fields['password']][0].isHidden()
+    assert not window.reveal.isHidden()
+    window.reveal.setChecked(True)
+    assert window.extra_widgets['password'][0][1].echoMode() == QLineEdit.EchoMode.Normal
+
+
 def test_bulk_clipboard_and_additional_draft_reopen(window, monkeypatch):
     from PySide6.QtCore import Qt
     window.fields['title'].setText('Draft with extras')

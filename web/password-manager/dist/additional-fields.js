@@ -17,3 +17,9 @@ export function splitPasswords(text) {
   if (values.length > 1000 || values.some(value => [...value].length > 100000)) throw new Error('Можно вставить до 1000 паролей, каждый до 100000 символов.');
   return values;
 }
+
+export function nextPasswordNumber(doc) {
+  const values = Object.values(doc.entries).filter(entry => entry.entry_type === 'password' && !entry.deleted_at)
+    .map(entry => entry.note.trim()).filter(note => /^[0-9]{1,15}$/.test(note)).map(Number);
+  return values.reduce((maximum, value) => Math.max(maximum, value), 0) + 1;
+}

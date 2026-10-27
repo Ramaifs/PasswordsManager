@@ -46,7 +46,7 @@ def stylesheet(dark=True, accent_color="#8864cb"):
         QComboBox QAbstractItemView {{ background: {panel}; color: {text}; border: 1px solid {line};
             outline: 0; selection-background-color: {selected}; selection-color: {text}; padding: 0; }}
         QComboBox QAbstractItemView::item {{ padding: 9px 11px; border: none; }}
-        QPushButton, QToolButton {{ background: transparent; border: 1px solid transparent;
+        QPushButton, QToolButton {{ background: transparent; border: 1px solid {line};
             border-radius: 7px; padding: 9px 12px; }}
         QPushButton:hover, QToolButton:hover {{ background: {hover}; border-color: {line}; }}
         QPushButton:pressed, QToolButton:pressed {{ background: {selected}; }}

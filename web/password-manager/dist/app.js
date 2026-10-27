@@ -1,4 +1,5 @@
-import { EXTRA_FIELDS, FIELD_LABELS, additionalFields, migrateOldPasswords, splitPasswords } from './additional-fields.js';
+import { bulkEdit } from './bulk-entries.js';
+import { EXTRA_FIELDS, FIELD_LABELS, additionalFields, migrateOldPasswords, splitPasswords, nextPasswordNumber } from './additional-fields.js';
 import { sortEntries, savedEntryOrder, rememberEntryOrder } from './entry-order.js';
 import { matchesEntry } from './search.js';
 import { suggestions, SUGGESTION_FIELDS } from './suggestions.js';
@@ -41,6 +42,8 @@ let driveController, driveIdentity, cloudCopies = [], oldVaults = [], oauthPendi
 const syncSchedule = new SyncSchedule();
 const collapsedCategories = new Set();
 let draggedCategory = null;
+const selectedEntries = new Set();
+let selectionAnchor = null;
 let generatorOptions = { ...defaultGenerator };
 const driveCache = new Map();
 async function stopDrive() { driveController?.abort(); await disconnectGoogle(); driveIdentity = null; driveCache.clear(); }
@@ -172,10 +175,12 @@ function workspaceSidebar() {
 }
 function recordList() {
   const entries = visibleEntries();
+  const visible = new Set(entries.map(entry => entry.id));
+  for (const id of selectedEntries) if (!visible.has(id)) selectedEntries.delete(id);
   return entries.length ? entries.map(e => {
-    const category = e.entry_type === 'password' ? 'Прочие пароли' : state.doc.categories[e.category] || 'Без категории';
-    const color = e.category ? state.doc.settings.category_colors?.[e.category] || state.doc.settings.accent_color || '#8864cb' : '';
-    return `<button class="record ${e.id === state.selected ? 'active' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${e.entry_type === 'password' ? '*' : esc(initials(e.title))}</span><span><strong ${color && state.category === 'all' ? `data-entry-color="${esc(color)}"` : ''}>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small>${state.category === 'all' ? `<small class="record-category">${esc(category)}</small>` : ''}</span></button>`;
+    const category = e.entry_type === 'password' && !e.category ? 'Прочие пароли' : state.doc.categories[e.category] || 'Без категории';
+    const color = e.color || (e.category ? state.doc.settings.category_colors?.[e.category] || state.doc.settings.accent_color || '#8864cb' : '');
+    return `<button class="record ${e.id === state.selected ? 'active' : ''} ${selectedEntries.has(e.id) ? 'selected' : ''}" data-action="select-entry" data-id="${esc(e.id)}"><span class="record-badge">${e.entry_type === 'password' ? '*' : esc(initials(e.title))}</span><span><strong ${color ? `data-entry-color="${esc(color)}"` : ''}>${esc(e.title)}</strong><small>${esc(e.username || e.email || e.site || 'Без логина')}</small>${state.category === 'all' ? `<small class="record-category">${esc(category)}</small>` : ''}</span></button>`;
   }).join('') : `<div class="empty-state"><p>${state.query ? 'Ничего не найдено.<br>Попробуйте другой запрос.' : state.category === 'trash' ? 'В корзине пока пусто.' : 'Здесь пока нет записей.'}</p></div>`;
 }
 function applyEntryColors() {
@@ -201,8 +206,62 @@ function workspace() {
   applyEntryColors();
   renderEditor();
 }
+
+function refreshSelectionList() {
+  document.querySelector('#records').innerHTML = recordList(); applyEntryColors();
+  document.querySelector('#list-foot').textContent = selectedEntries.size ? `Выбрано записей: ${selectedEntries.size}` : `${visibleEntries().length} записей · Зашифровано на устройстве`;
+}
+async function selectRecords(node, ctrl, shift) {
+  const id = node.dataset.id, rows = visibleEntries().map(entry => entry.id);
+  if (shift && selectionAnchor && rows.includes(selectionAnchor)) {
+    if (!ctrl) selectedEntries.clear();
+    const a = rows.indexOf(selectionAnchor), b = rows.indexOf(id);
+    for (const value of rows.slice(Math.min(a,b), Math.max(a,b) + 1)) selectedEntries.add(value);
+    refreshSelectionList(); return;
+  }
+  if (ctrl) {
+    if (selectedEntries.has(id)) selectedEntries.delete(id); else selectedEntries.add(id);
+    selectionAnchor = id; refreshSelectionList(); return;
+  }
+  if (!await confirmLeave()) return;
+  selectedEntries.clear(); selectedEntries.add(id); selectionAnchor = id;
+  state.selected = id; state.editingEntry = false; state.editingNew = false; state.dirty = false; workspace();
+}
+document.addEventListener('contextmenu', event => {
+  const row = event.target.closest('.record[data-id]'); if (!row || state.busy) return;
+  event.preventDefault(); document.querySelector('#record-context-menu')?.remove();
+  if (!selectedEntries.has(row.dataset.id)) { selectedEntries.clear(); selectedEntries.add(row.dataset.id); selectionAnchor = row.dataset.id; refreshSelectionList(); }
+  const menu = document.createElement('div'); menu.id = 'record-context-menu'; menu.className = 'record-context-menu'; menu.setAttribute('role','menu');
+  menu.innerHTML = `<small>Выбрано записей: ${selectedEntries.size}</small><button data-action="bulk-color">Изменить цвет…</button><button data-action="bulk-reset-color">Цвет по категории</button><button data-action="bulk-category">Изменить категорию…</button><button class="danger" data-action="bulk-delete">Удалить пароли</button>`;
+  document.body.append(menu); menu.style.left = Math.max(8, Math.min(event.clientX, innerWidth - menu.offsetWidth - 8)) + 'px'; menu.style.top = Math.max(8, Math.min(event.clientY, innerHeight - menu.offsetHeight - 8)) + 'px';
+});
+async function prepareBulk() {
+  const ids = [...selectedEntries].filter(id => state.doc.entries[id]);
+  if (!ids.length || !await confirmLeave()) return false;
+  state.bulkIds = ids; return true;
+}
+function bulkDialog(field) {
+  const input = field === 'color' ? `<input id="bulk-value" type="color" value="${esc(state.doc.settings.accent_color || '#8864cb')}">` : `<select id="bulk-value"><option value="">Без категории</option>${categoryRows(state.doc).map(row => `<option value="${esc(row.id)}">${esc(row.path)}</option>`).join('')}</select>`;
+  showModal(field === 'color' ? 'Цвет выбранных записей' : 'Категория выбранных записей', `<form id="bulk-form" data-field="${field}"><p>Выбрано записей: ${state.bulkIds.length}</p><div class="field">${input}</div><button class="primary" type="submit">Применить</button></form>`);
+}
+async function saveBulk(field, value) {
+  const next = clone(state.doc); bulkEdit(next, state.bulkIds, field, value); await persist(next); state.dirty = false; workspace();
+}
+async function deleteSelectedRecords() {
+  if (!await prepareBulk()) return;
+  const ids = state.bulkIds, permanent = ids.every(id => state.doc.entries[id].deleted_at);
+  if (await ask('Удаление записей', permanent ? `Удалить выбранные записи (${ids.length}) навсегда?` : `Переместить выбранные пароли (${ids.length}) в корзину?`, [{value:'cancel',label:'Отмена'},{value:'delete',label:'Удалить',primary:true}]) !== 'delete') return;
+  const next = clone(state.doc), timestamp = now();
+  for (const id of ids) {
+    if (permanent) { delete next.entries[id]; next.tombstones[id] = timestamp; }
+    else { next.entries[id].deleted_at = timestamp; next.entries[id].updated_at = timestamp; }
+    delete next.drafts[id];
+  }
+  await persist(next); state.selected = null; state.editingEntry = false; state.editingNew = false; state.dirty = false; selectedEntries.clear(); workspace();
+}
+
 function listActions() {
-  if (state.category !== 'trash') return `${state.category === 'other-passwords' ? '<button class="quiet small" data-action="paste-passwords">Вставить пароли</button>' : ''}<button class="icon-button quiet" data-action="new-entry" aria-label="Новая запись">${icon('plus')}</button>`;
+  if (state.category !== 'trash') return `${state.category === 'other-passwords' ? '<button class="quiet small" data-action="paste-passwords">Вставить пароли с буфера обмена</button>' : ''}<button class="icon-button quiet" data-action="new-entry" aria-label="Новая запись">${icon('plus')}</button>`;
   const count = Object.values(state.doc.entries).filter(entry => entry.deleted_at).length;
   return `<button class="danger secondary small" data-action="empty-trash" ${count ? '' : 'disabled'}>Очистить корзину</button>`;
 }
@@ -220,7 +279,7 @@ function renderEditor(draft) {
     const secret = ['password', 'second_password'].includes(key);
     const id = index === null ? `entry-${key}` : `entry-${key}-${index}`;
     const label = FIELD_LABELS[key] + (index === null ? '' : ` №${index + 2}`);
-    return `<div class="field ${key === 'second_password' || index !== null ? 'advanced-field' : ''}" ${!advanced && (key === 'second_password' || index !== null) ? 'hidden' : ''}><label for="${id}">${label}${index === null && EXTRA_FIELDS.includes(key) && editable && !passwordOnly ? `<button type="button" class="add-field" data-action="add-field" data-field="${key}" aria-label="Добавить: ${label}" ${advanced ? '' : 'hidden'}>+</button>` : ''}</label><input id="${id}" ${index === null ? `name="${key}"` : `data-extra-field="${key}"`} type="${secret ? 'password' : 'text'}" value="${esc(value || '')}" autocomplete="off" maxlength="100000" ${editable ? '' : 'readonly'} ${key === 'title' ? 'required' : ''} ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">${icon('copy')}Копировать</button>${key === 'password' && index === null && editable ? '<button type="button" data-action="generate-entry">Сгенерировать</button>' : ''}</div>` : ''}</div>`;
+    return `<div class="field ${key === 'second_password' || index !== null ? 'advanced-field' : ''}" ${!advanced && (key === 'second_password' || index !== null) ? 'hidden' : ''}><label for="${id}">${label}${index !== null && editable ? `<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button>` : ''}${index === null && EXTRA_FIELDS.includes(key) && editable && !passwordOnly ? `<button type="button" class="add-field" data-action="add-field" data-field="${key}" aria-label="Добавить: ${label}" ${advanced ? '' : 'hidden'}>+</button>` : ''}</label><input id="${id}" ${index === null ? `name="${key}"` : `data-extra-field="${key}"`} type="${secret ? 'password' : 'text'}" value="${esc(value || '')}" autocomplete="off" maxlength="100000" ${editable ? '' : 'readonly'} ${key === 'title' ? 'required' : ''} ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">${icon('copy')}Копировать</button>${key === 'password' && index === null && editable ? '<button type="button" data-action="generate-entry">Сгенерировать</button>' : ''}</div>` : ''}</div>`;
   };
   const fields = (passwordOnly ? ['password', 'note'] : Object.keys(FIELD_LABELS)).map(key => {
     if (key === 'note') return `<div class="field" ${!editable && !values.note ? 'hidden' : ''}><label for="entry-note">Заметка</label><textarea id="entry-note" name="note" maxlength="100000" ${editable ? '' : 'readonly'}>${esc(values.note)}</textarea></div>`;
@@ -228,6 +287,8 @@ function renderEditor(draft) {
     return `<div data-field-group="${key}">${field(key, values[key])}${(extra[key] || []).map((value, index) => field(key, value, index)).join('')}</div>`;
   }).join('');
   target.innerHTML = `<header class="editor-top"><button class="mobile-menu" data-action="back-list">${icon('back')}Все записи</button><span class="save-state">${entry?.deleted_at ? 'В корзине' : savedStatus()}</span><div class="editor-actions"><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div></header><form id="entry-form" class="editor-content" data-entry-type="${passwordOnly ? 'password' : 'account'}"><div class="editor-heading"><span class="record-badge">${passwordOnly ? '*' : entry ? esc(initials(entry.title)) : icon('plus')}</span><div><h1>${entry ? esc(entry.title) : passwordOnly ? 'Прочий пароль' : 'Новая запись'}</h1><p>${passwordOnly ? 'Пароль и заметка' : 'Учётные данные'}</p></div></div>${fields}${passwordOnly ? '' : `<div class="field"><label for="entry-category">Категория</label><select id="entry-category" name="category" ${editable ? '' : 'disabled'}><option value="">Без категории</option>${categoryRows(state.doc).map(({id, path}) => `<option value="${esc(id)}" ${values.category === id ? 'selected' : ''}>${esc(path)}</option>`).join('')}</select></div>`}<div class="entry-options"><label><input type="checkbox" id="entry-reveal">Показать пароль</label>${passwordOnly ? '' : `<button type="button" class="advanced-options" data-action="advanced-options" aria-pressed="${advanced}">Продвинутые настройки</button>`}</div><p id="form-error" class="form-error"></p><div class="editor-bottom">${entry?.deleted_at ? '<button class="quiet" type="button" data-action="restore-entry">Восстановить</button><button class="danger secondary" type="button" data-action="purge-entry">Удалить навсегда</button>' : `<button class="quiet ${entry ? 'danger' : ''}" type="button" data-action="${entry ? 'trash-entry' : 'cancel-entry'}">${entry ? 'В корзину' : 'Отмена'}</button><button class="primary" type="${viewing ? 'button' : 'submit'}" ${viewing ? 'data-action="edit-entry"' : ''}>${viewing ? 'Редактировать' : 'Сохранить'}</button>`}</div></form>`;
+  target.querySelector('#entry-form').dataset.entryColor = values.color || '';
+  target.querySelector('#entry-form').dataset.category = values.category || '';
   for (const key of SUGGESTION_FIELDS) {
     const list = document.createElement('datalist'); list.id = `suggest-${key}`;
     for (const value of suggestions(state.doc, key)) { const option = document.createElement('option'); option.value = value; list.append(option); }
@@ -245,7 +306,8 @@ function editorValues() {
   const additional = {};
   form.querySelectorAll('[data-extra-field]').forEach(node => { (additional[node.dataset.extraField] ||= []).push(node.value); });
   if (Object.keys(additional).length) values.additional_fields = additional;
-  if (form.dataset.entryType === 'password') { values.entry_type = 'password'; values.category = null; values.title = passwordTitle(values.note); }
+  if (form.dataset.entryColor) values.color = form.dataset.entryColor;
+  if (form.dataset.entryType === 'password') { values.entry_type = 'password'; values.category = form.dataset.category || null; values.title = passwordTitle(values.note); }
   return values;
 }
 async function saveEntry() {
@@ -287,6 +349,7 @@ async function clearClipboard() {
   try { if (await navigator.clipboard.readText() === previous) await navigator.clipboard.writeText(''); } catch { /* Browser permissions may prohibit reading. Never clear unknown content. */ }
 }
 async function lock() {
+  selectedEntries.clear(); selectionAnchor = null; document.querySelector('#record-context-menu')?.remove();
   if (!state.token) return;
   // Requests stop on lock; the separate Google authorization remains in memory.
   // Drafts remain encrypted in session
@@ -527,6 +590,10 @@ const actions = {
     picker.innerHTML = `<h3>Основной цвет интерфейса</h3><div class="field"><input id="accent-picker-value" type="color" value="${document.querySelector('#settings-accent').value}"></div><div class="modal-actions"><button type="button" class="secondary" data-action="reset-accent">по умолчанию</button><button type="button" class="secondary" data-action="cancel-accent">Отмена</button><button type="button" class="primary" data-action="accept-accent">Выбрать</button></div>`;
     modal.append(picker); picker.addEventListener('close', () => picker.remove(), {once:true}); picker.showModal();
   },
+  'bulk-color': async () => { if (await prepareBulk()) bulkDialog('color'); },
+  'bulk-category': async () => { if (await prepareBulk()) bulkDialog('category'); },
+  'bulk-reset-color': async () => { if (await prepareBulk()) await saveBulk('color', null); },
+  'bulk-delete': async () => deleteSelectedRecords(),
   'reset-accent': async () => { document.querySelector('#accent-picker-value').value = '#8864cb'; },
   'cancel-accent': async () => { document.querySelector('#accent-color-picker').close(); },
   'accept-accent': async () => {
@@ -539,13 +606,24 @@ const actions = {
     const enabled = node.getAttribute('aria-pressed') !== 'true'; node.setAttribute('aria-pressed', String(enabled));
     document.querySelectorAll('#entry-form .advanced-field, #entry-form .add-field').forEach(field => { field.hidden = !enabled; });
   },
+  'remove-field': async node => {
+    const group = node.closest('[data-field-group]'), key = group.dataset.fieldGroup;
+    const removed = node.closest('.field');
+    removed.querySelector('input').value = ''; removed.remove();
+    group.querySelectorAll('[data-extra-field]').forEach((input, index) => {
+      const id = `entry-${key}-${index}`, container = input.closest('.field'), label = container.querySelector('label');
+      input.id = id; label.htmlFor = id; label.firstChild.textContent = `${FIELD_LABELS[key]} №${index + 2}`;
+      const copy = container.querySelector('[data-action="copy-secret"]'); if (copy) copy.dataset.target = id;
+    });
+    state.dirty = true;
+  },
   'add-field': async node => {
     const key = node.dataset.field, group = node.closest('[data-field-group]');
     const index = group.querySelectorAll('[data-extra-field]').length;
     if (index >= 100) throw new Error('Можно добавить до 100 дополнительных полей каждого типа.');
     const secret = ['password','second_password'].includes(key), id = `entry-${key}-${index}`;
     const container = document.createElement('div'); container.className = 'field advanced-field';
-    container.innerHTML = `<label for="${id}">${FIELD_LABELS[key]} №${index + 2}</label><input id="${id}" data-extra-field="${key}" type="${secret && !document.querySelector('#entry-reveal').checked ? 'password' : 'text'}" autocomplete="off" maxlength="100000" ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">Копировать</button></div>` : ''}`;
+    container.innerHTML = `<label for="${id}">${FIELD_LABELS[key]} №${index + 2}<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button></label><input id="${id}" data-extra-field="${key}" type="${secret && !document.querySelector('#entry-reveal').checked ? 'password' : 'text'}" autocomplete="off" maxlength="100000" ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">Копировать</button></div>` : ''}`;
     group.append(container); state.dirty = true; container.querySelector('input').focus();
   },
   'paste-passwords': async () => {
@@ -554,7 +632,8 @@ const actions = {
     let text; try { text = await navigator.clipboard.readText(); } catch { throw new Error('Разрешите доступ к буферу обмена в браузере.'); }
     if (generation !== state.generation || !state.doc) return;
     const values = splitPasswords(text), next = clone(state.doc);
-    for (const password of values) { const id = crypto.randomUUID(); next.entries[id] = {...Object.fromEntries(FIELDS.map(key => [key, ''])), entry_type:'password', title:passwordTitle(''), password, category:null, id, deleted_at:null, updated_at:now()}; }
+    let number = nextPasswordNumber(next);
+    for (const password of values) { const id = crypto.randomUUID(), note = String(number++); next.entries[id] = {...Object.fromEntries(FIELDS.map(key => [key, ''])), entry_type:'password', title:passwordTitle(note), note, password, category:null, id, deleted_at:null, updated_at:now()}; }
     await persist(next); state.selected = null; state.editingNew = false; state.dirty = false; workspace(); toast(`Добавлено паролей: ${values.length}`);
   },
   reveal: async node => { const input = document.getElementById(node.dataset.target); input.type = input.type === 'password' ? 'text' : 'password'; if (node.dataset.target.startsWith('conflict-')) node.closest('.backup-row').querySelectorAll('[data-conflict-secret]').forEach(field => { field.type = input.type; }); node.setAttribute('aria-label', input.type === 'password' ? 'Показать пароль' : 'Скрыть пароль'); },
@@ -584,10 +663,10 @@ const actions = {
     for (const draft of Object.values(next.drafts)) if (draft.category === id) draft.category = null;
     await persist(next); state.category = 'all'; state.selected = null; state.editingNew = false; workspace(); toast('Категория удалена');
   },
-  'new-entry': async () => { if (!await confirmLeave()) return; state.selected = null; state.editingNew = true; state.dirty = false; workspace(); },
+  'new-entry': async () => { if (!await confirmLeave()) return; selectedEntries.clear(); selectionAnchor = null; state.selected = null; state.editingNew = true; state.dirty = false; workspace(); },
   'cancel-entry': async () => { if (!await confirmLeave()) return; state.selected = null; state.editingNew = false; workspace(); },
   'select-entry': async node => { if (!await confirmLeave()) return; state.selected = node.dataset.id; state.editingEntry = false; state.editingNew = false; state.dirty = false; workspace(); },
-  filter: async node => { if (!await confirmLeave()) return; state.category = node.dataset.id; state.selected = null; state.editingNew = false; workspace(); },
+  filter: async node => { if (!await confirmLeave()) return; selectedEntries.clear(); selectionAnchor = null; state.category = node.dataset.id; state.selected = null; state.editingNew = false; workspace(); },
   'back-list': async () => { if (!await confirmLeave()) return; state.selected = null; state.editingNew = false; workspace(); },
   export: async () => { if (state.dirty) toast('Экспорт содержит последнее сохранённое состояние.'); download(state.record.blob, filename(state.record.name) + '-vault-export.pmvault'); },
   'copy-password': () => copy(document.querySelector('#entry-password').value, true),
@@ -645,9 +724,11 @@ document.addEventListener('drop', event => {
 document.addEventListener('dragend', () => { draggedCategory = null; });
 
 document.addEventListener('click', e => {
+  document.querySelector('#record-context-menu')?.remove();
   const node = e.target.closest('[data-action]'); if (!node || node.disabled) return;
   if (node.dataset.action === 'lock' && state.busy) { pauseDrive(); state.lockRequested = true; if (modal.open) closeModal(); return; }
   if (node.dataset.action === 'close-modal' && modal.querySelector('[data-choice]')) return;
+  if (node.dataset.action === 'select-entry') { e.preventDefault(); safe(() => selectRecords(node, e.ctrlKey || e.metaKey, e.shiftKey)); return; }
   const action = actions[node.dataset.action]; if (action) { e.preventDefault(); safe(() => action(node)); }
 });
 document.addEventListener('change', e => {
@@ -679,6 +760,7 @@ document.addEventListener('submit', e => {
       await persist(next); closeModal(); workspace();
     }
     else if (form.id === 'generator-form') { const data = new FormData(form), options = { length: Number(data.get('length')), count: Number(data.get('count')), ...Object.fromEntries(['lower', 'upper', 'digits', 'symbols', 'exclude_similar'].map(k => [k, data.has(k)])) }; const passwords = generate(options); generatorOptions = options; document.querySelector('#gen-output').value = passwords.join('\n'); }
+    else if (form.id === 'bulk-form') { const field = form.dataset.field; await saveBulk(field, field === 'category' ? document.querySelector('#bulk-value').value || null : document.querySelector('#bulk-value').value); closeModal(); }
     else if (form.id === 'settings-form') {
       const next = clone(state.doc), previousInterval = syncMinutes(next.settings);
       next.settings.lock_minutes = Number(new FormData(form).get('lock_minutes'));

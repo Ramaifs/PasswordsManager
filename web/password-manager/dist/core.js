@@ -191,11 +191,12 @@ export function newDocument() {
 function timestamp(value) { return text(value) && /(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value)); }
 function validFields(value, extra) {
   // Preserve old wire values exactly: adding empty fields would reuse causal dots.
-  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : []), ...(Object.hasOwn(value, 'additional_fields') ? ['additional_fields'] : [])]) &&
+  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : []), ...(Object.hasOwn(value, 'additional_fields') ? ['additional_fields'] : []), ...(Object.hasOwn(value, 'color') ? ['color'] : [])]) &&
+    (!Object.hasOwn(value, 'color') || (typeof value.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.color))) &&
     (!Object.hasOwn(value, 'additional_fields') || (object(value.additional_fields) && Object.entries(value.additional_fields).every(([key, items]) => EXTRA_FIELDS.includes(key) && Array.isArray(items) && items.length <= 100 && items.every(item => text(item) && charLength(item) <= 100000)))) &&
     (!Object.hasOwn(value, 'entry_type') || ['account', 'password'].includes(value.entry_type)) &&
     FIELDS.every(f => !Object.hasOwn(value, f) || (text(value[f]) && charLength(value[f]) <= 100000)) &&
-    (value.entry_type !== 'password' || (value.category === null && !Object.values(value.additional_fields || {}).some(items => items.length) && FIELDS.every(f => ['title', 'password', 'note'].includes(f) || !value[f]) && (!extra.includes('id') || !!value.password)));
+    (value.entry_type !== 'password' || (!Object.values(value.additional_fields || {}).some(items => items.length) && FIELDS.every(f => ['title', 'password', 'note'].includes(f) || !value[f]) && (!extra.includes('id') || !!value.password)));
 }
 function validateRecord(entry, id) {
   if (!validFields(entry, ['id', 'category', 'deleted_at', 'updated_at']) || entry.id !== id || !uuidPattern.test(id)) fail();

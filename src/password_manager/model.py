@@ -50,7 +50,32 @@ def paste_passwords(doc, text):
         raise VaultError("В буфере обмена нет паролей.")
     if len(passwords) > 1000 or any(len(value) > 100_000 for value in passwords):
         raise VaultError("Можно вставить до 1000 паролей, каждый до 100000 символов.")
-    return [save_entry(doc, {"entry_type": "password", "password": value}) for value in passwords]
+    numbers = [int(note) for record in doc["entries"].values() if record.get("entry_type") == "password" and not record["deleted_at"]
+               if (note := record["note"].strip()).isascii() and note.isdigit() and len(note) <= 15]
+    start = max(numbers, default=0) + 1
+    return [save_entry(doc, {"entry_type": "password", "password": value, "note": str(index)}) for index, value in enumerate(passwords, start)]
+
+
+def bulk_edit(doc, entry_ids, field, value):
+    ids = list(dict.fromkeys(entry_ids))
+    if not ids or any(eid not in doc["entries"] for eid in ids):
+        raise VaultError("Выберите существующие записи.")
+    if field == "category":
+        if value is not None and value not in doc["categories"]:
+            raise VaultError("Категория не найдена.")
+    elif field == "color":
+        if value is not None and (not isinstance(value, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", value)):
+            raise VaultError("Некорректный цвет записи.")
+    else:
+        raise VaultError("Неизвестное свойство записи.")
+    timestamp = now()
+    for eid in ids:
+        entry = doc["entries"][eid]
+        if field == "color" and value is None:
+            entry.pop("color", None)
+        else:
+            entry[field] = value
+        entry["updated_at"] = timestamp
 
 
 def suggestions(doc, field):
@@ -67,12 +92,13 @@ def suggestions(doc, field):
 def valid_fields(record, extra):
     """Accept legacy records without changing immutable causal register values."""
     required = (set(FIELDS) - OPTIONAL_FIELDS) | set(extra)
-    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type", "additional_fields"}
+    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type", "additional_fields", "color"}
+            and ("color" not in record or (isinstance(record["color"], str) and bool(re.fullmatch(r"#[0-9a-fA-F]{6}", record["color"]))))
             and valid_additional(record.get("additional_fields", {}))
             and record.get("entry_type", "account") in ("account", "password")
             and all(isinstance(record.get(f, ""), str) and len(record.get(f, "")) <= 100_000 for f in FIELDS)
             and (record.get("entry_type") != "password" or
-                 (record["category"] is None and not any(record.get("additional_fields", {}).values()) and not any(record.get(f, "") for f in FIELDS if f not in ("title", "password", "note"))
+                 (not any(record.get("additional_fields", {}).values()) and not any(record.get(f, "") for f in FIELDS if f not in ("title", "password", "note"))
                   and ("id" not in extra or bool(record["password"])))))
 
 
@@ -188,7 +214,7 @@ def save_entry(doc, values, entry_id=None):
         values["title"] = password_title(values.get("note", ""))
     if not isinstance(values.get("title"), str) or not values["title"].strip():
         raise VaultError("Укажите название записи.")
-    if set(values) - (set(FIELDS) | {"category", "entry_type", "additional_fields"}):
+    if set(values) - (set(FIELDS) | {"category", "entry_type", "additional_fields", "color"}):
         raise VaultError("Неизвестные поля записи.")
     if any(not isinstance(values.get(f, ""), str) or len(values.get(f, "")) > 100_000 for f in FIELDS):
         raise VaultError("Недопустимые поля записи.")
@@ -199,6 +225,9 @@ def save_entry(doc, values, entry_id=None):
         raise VaultError("Запись не найдена.")
     entry_id = entry_id or str(uuid.uuid4())
     record = {f: values.get(f, "") for f in FIELDS}
+    color = values.get("color", doc["entries"].get(entry_id, {}).get("color"))
+    if color is not None:
+        record["color"] = color
     if "additional_fields" in values:
         record["additional_fields"] = deepcopy(values["additional_fields"])
     record.update(id=entry_id, category=category, deleted_at=None, updated_at=now())
@@ -346,7 +375,7 @@ def search(doc, query="", category_id="all", deleted=False):
 
     selected = category_descendants(doc, category_id)
     return [deepcopy(e) for e in doc["entries"].values()
-            if bool(e["deleted_at"]) == deleted and (category_id == "all" or (e.get("entry_type") != "password" and e["category"] in selected)
+            if bool(e["deleted_at"]) == deleted and (category_id == "all" or ((category_id is not None or e.get("entry_type") != "password") and e["category"] in selected)
                 or (category_id == "other-passwords" and e.get("entry_type") == "password"))
             and matches(e)]
 

@@ -2,7 +2,7 @@ import { categoryRows } from './categories.js';
 
 export function sortEntries(entries, order = 'title', doc = {categories:{}}) {
   const paths = new Map(categoryRows(doc).map(row => [row.id, row.path]));
-  const category = entry => entry.entry_type === 'password' ? 'Прочие пароли' : paths.get(entry.category) || 'Без категории';
+  const category = entry => paths.get(entry.category) || (entry.entry_type === 'password' ? 'Прочие пароли' : 'Без категории');
   return [...entries].sort((a, b) =>
     (order === 'category' ? category(a).localeCompare(category(b), 'ru', {sensitivity:'base'}) : 0) ||
     (order === 'updated' ? b.updated_at.localeCompare(a.updated_at) : 0) ||
