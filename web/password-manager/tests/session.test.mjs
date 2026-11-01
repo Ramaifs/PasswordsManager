@@ -134,3 +134,96 @@ test('Worker token exchange uses supported manual redirects and never follows cr
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, 'google_unavailable');
 });
+
+test('mobile full-page OAuth binds state to the browser, uses PKCE and removes codes before rendering', async () => {
+  const { env, request, grants, values } = fixture();
+  const start = await handleSession(request('start'), env);
+  assert.equal(start.status, 200);
+  const auth = new URL((await start.json()).authorization_url);
+  assert.equal(auth.origin, 'https://accounts.google.com');
+  assert.equal(auth.searchParams.get('redirect_uri'), origin + '/');
+  assert.equal(auth.searchParams.get('code_challenge_method'), 'S256');
+  assert.equal(auth.searchParams.get('access_type'), 'offline');
+  assert.ok(auth.searchParams.get('code_challenge').length >= 43);
+  const flowCookie = start.headers.get('Set-Cookie').split(';')[0];
+  assert.ok(start.headers.get('Set-Cookie').includes('SameSite=Lax'));
+  const callback = (state, cookie = flowCookie) => new Request(origin + '/?code=FICTIONAL-CODE&state=' + state, { headers: { Cookie: cookie } });
+  const state = auth.searchParams.get('state');
+  assert.equal((await handleSession(callback('forged'), env)).status, 303);
+  assert.equal(values.size, 0);
+  assert.equal((await handleSession(callback(state, ''), env)).status, 303);
+  assert.equal(values.size, 0);
+  const finish = await handleSession(callback(state), env);
+  assert.equal(finish.status, 303);
+  assert.equal(finish.headers.get('Location'), origin + '/?google=connected');
+  assert.ok(!finish.headers.get('Location').includes('FICTIONAL'));
+  assert.ok(finish.headers.get('Set-Cookie').includes('__Host-pm-google='));
+  assert.ok(finish.headers.get('Set-Cookie').includes('__Host-pm-oauth=;'));
+  assert.equal(grants[0].redirect_uri, origin + '/');
+  assert.ok(grants[0].code_verifier.length >= 43);
+  assert.equal(values.size, 1);
+});
+
+test('OAuth redirect rejects expired/tampered state, denial and foreign origin without exchanging a code', async () => {
+  const { env, request, values, grants } = fixture();
+  const start = await handleSession(request('start'), env);
+  assert.equal(start.status, 200);
+  const { authorization_url } = await start.json();
+  const state = new URL(authorization_url).searchParams.get('state');
+  const cookie = start.headers.get('Set-Cookie').split(';')[0];
+  const denied = await handleSession(new Request(origin + '/?error=access_denied&state=' + state, { headers: { Cookie: cookie } }), env);
+  assert.ok(denied.headers.get('Location').endsWith('?google=denied'));
+  const forged = request('start'); forged.headers.set('Origin', 'https://evil.invalid');
+  assert.equal((await handleSession(forged, env)).status, 403);
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 601000;
+    const expired = await handleSession(new Request(origin + '/?code=CODE&state=' + state, { headers: { Cookie: cookie } }), env);
+    assert.ok(expired.headers.get('Location').endsWith('?google=invalid_state'));
+  } finally { Date.now = realNow; }
+  assert.equal(values.size, 0); assert.equal(grants.length, 0);
+});
+
+test('Android and iOS use a top-level Google request without loading GIS popup code', async () => {
+  const originals = { fetch: globalThis.fetch, navigator: Object.getOwnPropertyDescriptor(globalThis, 'navigator'), location: globalThis.location };
+  let navigated, scriptLoaded = false;
+  globalThis.location = { assign: url => { navigated = new URL(url); } };
+  globalThis.fetch = async path => {
+    if (path.endsWith('/config')) return Response.json({ enabled: true, clientId: '123-test.apps.googleusercontent.com' });
+    if (path.endsWith('/start')) return Response.json({ authorization_url: 'https://accounts.google.com/o/oauth2/v2/auth?state=FICTIONAL' });
+    return Response.json({ error: 'expired' }, { status: 401 });
+  };
+  try {
+    for (const userAgent of ['Mozilla/5.0 (Linux; Android 15)', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)', 'Mozilla/5.0 (Macintosh; Intel Mac OS X)']) {
+      Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { userAgent, maxTouchPoints: 5 } });
+      const client = await import('../dist/google.js?mobile=' + encodeURIComponent(userAgent));
+      await client.initializeGoogleSession('123-test.apps.googleusercontent.com');
+      assert.equal(client.redirectPreferred(), true);
+      await client.loadGoogle();
+      assert.equal(await client.authorize('123-test.apps.googleusercontent.com'), null);
+      assert.equal(navigated.origin, 'https://accounts.google.com');
+    }
+  } finally {
+    globalThis.fetch = originals.fetch; globalThis.location = originals.location;
+    if (originals.navigator) Object.defineProperty(globalThis, 'navigator', originals.navigator); else delete globalThis.navigator;
+  }
+});
+
+test('login keeps an open vault tab in memory and rejects a forged server navigation target', async () => {
+  const originals = { fetch: globalThis.fetch, open: globalThis.open };
+  let closed = false;
+  globalThis.open = () => ({ close: () => { closed = true; }, location: { replace() { assert.fail('Untrusted navigation'); } } });
+  globalThis.fetch = async path => {
+    if (path.endsWith('/config')) return Response.json({ enabled: true, clientId: '123-test.apps.googleusercontent.com' });
+    if (path.endsWith('/start')) return Response.json({ authorization_url: 'https://evil.invalid/' });
+    return Response.json({}, { status: 401 });
+  };
+  try {
+    const client = await import('../dist/google.js?preserve-page');
+    await client.initializeGoogleSession('123-test.apps.googleusercontent.com');
+    await assert.rejects(client.authorizeRedirect({ preservePage: true }), /адрес/);
+    assert.equal(closed, true);
+    globalThis.open = () => null;
+    await assert.rejects(client.authorizeRedirect({ preservePage: true }), /вкладки/);
+  } finally { globalThis.fetch = originals.fetch; globalThis.open = originals.open; }
+});

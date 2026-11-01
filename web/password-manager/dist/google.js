@@ -61,8 +61,40 @@ export async function disconnectGoogle() {
   if (persistent) await sessionRequest('logout');
 }
 export function persistentSessionEnabled() { return persistent; }
+export function redirectPreferred() {
+  const nav = globalThis.navigator;
+  return persistent && (/Android|iPhone|iPad|iPod/i.test(nav?.userAgent || '') || (/Macintosh/.test(nav?.userAgent || '') && nav?.maxTouchPoints > 1));
+}
+export async function authorizeRedirect({ preservePage = false } = {}) {
+  if (!persistent) throw new Error('Вход без всплывающего окна требует настроенного сервера Google-сессий.');
+  // Keep an open vault in its original tab: vault bytes intentionally live only in memory.
+  const tab = preservePage ? globalThis.open('about:blank', '_blank') : null;
+  if (preservePage && !tab) throw new Error('Разрешите открытие вкладки для входа Google или сначала сохраните хранилище в файл и войдите с начального экрана.');
+  const generation = epoch;
+  try {
+    const result = await sessionRequest('start');
+    const url = new URL(result.authorization_url);
+    if (url.origin !== 'https://accounts.google.com' || url.pathname !== '/o/oauth2/v2/auth') throw new Error('Сервер вернул неверный адрес входа Google.');
+    if (generation !== epoch) throw new Error('Вход отменён.');
+    if (!preservePage) { globalThis.location.assign(url.href); return null; }
+    tab.location.replace(url.href);
+    const deadline = Date.now() + 180000;
+    while (Date.now() < deadline && generation === epoch) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      try {
+        const response = await sessionRequest('token');
+        if (generation !== epoch) throw new Error('Вход отменён.');
+        const value = acceptToken(response); serverSession = true;
+        try { tab.close(); } catch { /* Some browsers detach the Google tab. */ }
+        return value;
+      } catch (error) { if (error.status !== 401) throw error; }
+    }
+    throw new Error('Вход Google не завершён. Вернитесь в исходную вкладку и повторите подключение.');
+  } catch (error) { try { tab?.close(); } catch {} throw error; }
+}
 export function validClientId(value) { return typeof value === 'string' && /^[0-9]+-[a-zA-Z0-9_-]+\.apps\.googleusercontent\.com$/.test(value); }
 export function loadGoogle() {
+  if (redirectPreferred()) return Promise.resolve();
   if (globalThis.google?.accounts?.oauth2) return Promise.resolve();
   if (loading) return loading;
   loading = new Promise((resolve, reject) => {
@@ -73,7 +105,8 @@ export function loadGoogle() {
     document.head.append(script);
   }); return loading;
 }
-export function authorize(clientId) {
+export function authorize(clientId, options = {}) {
+  if (options.redirect || redirectPreferred()) return authorizeRedirect(options);
   if (!validClientId(clientId) || !globalThis.google?.accounts?.oauth2) return Promise.reject(new Error('Сначала настройте Web client ID и подготовьте вход Google.'));
   const generation = epoch;
   return new Promise((resolve, reject) => {

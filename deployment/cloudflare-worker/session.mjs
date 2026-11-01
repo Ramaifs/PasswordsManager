@@ -1,6 +1,7 @@
 // OAuth sessions contain Google credentials only; vault data never reaches this handler.
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const COOKIE = '__Host-pm-google';
+const FLOW_COOKIE = '__Host-pm-oauth';
 const LIFETIME = 30 * 86400;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -14,6 +15,8 @@ function reply(value, status = 200, cookie) {
 }
 const cookie = (id, age = LIFETIME) => `${COOKIE}=${id}; Path=/; Max-Age=${age}; Secure; HttpOnly; SameSite=Strict`;
 const sessionId = request => request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
+const flowCookie = (value, age = 600) => `${FLOW_COOKIE}=${value}; Path=/; Max-Age=${age}; Secure; HttpOnly; SameSite=Lax`;
+const readCookie = (request, name) => request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(name + '='))?.slice(name.length + 1);
 const configured = env => !!(env.GOOGLE_SESSIONS && env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.SESSION_ENCRYPTION_KEY && env.SITE_ORIGIN);
 class SessionError extends Error {
   constructor(code, status = 503) { super(code); this.code = code; this.status = status; }
@@ -31,6 +34,40 @@ async function seal(value, env, id) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encrypted = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: encoder.encode(id) }, await key(env), encoder.encode(JSON.stringify(value)));
   return JSON.stringify({ iv: b64(iv), data: b64(new Uint8Array(encrypted)) });
+}
+async function unseal(stored, env, id) {
+  const box = JSON.parse(stored);
+  const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv), additionalData: encoder.encode(id) }, await key(env), unb64(box.data));
+  return JSON.parse(decoder.decode(raw));
+}
+async function newSession(tokens, env) {
+  const id = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const sealed = await seal({ refresh: tokens.refresh_token, expires: Date.now() + LIFETIME * 1000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID }, env, id);
+  await env.GOOGLE_SESSIONS.put(id, sealed, { expirationTtl: LIFETIME });
+  return id;
+}
+function returnToSite(env, result, id) {
+  const headers = new Headers({ Location: env.SITE_ORIGIN + '/?google=' + result, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+  headers.append('Set-Cookie', flowCookie('', 0));
+  if (id) headers.append('Set-Cookie', cookie(id));
+  return new Response(null, { status: 303, headers });
+}
+async function redirectCallback(request, env, url) {
+  let flow;
+  try {
+    const stored = readCookie(request, FLOW_COOKIE);
+    if (!stored || stored.length > 4096) return returnToSite(env, 'invalid_state');
+    flow = await unseal(decoder.decode(unb64(stored)), env, 'oauth-flow');
+    if (flow.expires <= Date.now() || flow.origin !== env.SITE_ORIGIN || flow.client !== env.GOOGLE_CLIENT_ID || !flow.state || flow.state !== url.searchParams.get('state')) return returnToSite(env, 'invalid_state');
+  } catch { return returnToSite(env, 'invalid_state'); }
+  if (url.searchParams.has('error')) return returnToSite(env, 'denied');
+  const code = url.searchParams.get('code');
+  if (!code || code.length > 4096) return returnToSite(env, 'denied');
+  try {
+    const tokens = await googleToken({ code, grant_type: 'authorization_code', redirect_uri: env.SITE_ORIGIN + '/', code_verifier: flow.verifier }, env);
+    if (!tokens?.refresh_token) return returnToSite(env, 'offline_access_missing');
+    return returnToSite(env, 'connected', await newSession(tokens, env));
+  } catch (error) { return returnToSite(env, error instanceof SessionError ? error.code : 'google_exchange_unavailable'); }
 }
 async function readSession(request, env) {
   const id = sessionId(request);
@@ -91,10 +128,20 @@ export async function handleSession(request, env) {
   if (path === '/api/google/config' && request.method === 'GET') return reply({ enabled: configured(env), clientId: configured(env) ? env.GOOGLE_CLIENT_ID : null });
   if (!configured(env)) return reply({ error: 'Google session service is not configured' }, 503);
   if (!validSessionKey(env)) return reply({ error: 'session_key_invalid' }, 503);
+  if (url.origin === env.SITE_ORIGIN && path === '/' && request.method === 'GET' && (url.searchParams.has('code') || url.searchParams.has('error'))) return redirectCallback(request, env, url);
   if (url.origin !== env.SITE_ORIGIN || request.headers.get('Origin') !== env.SITE_ORIGIN || request.headers.get('X-Requested-With') !== 'XMLHttpRequest') return reply({ error: 'Invalid request origin' }, 403);
   if (request.method !== 'POST') return reply({ error: 'Method not allowed' }, 405);
   let stage = 'session_storage_unavailable';
   try {
+    if (path === '/api/google/start') {
+      const state = b64(crypto.getRandomValues(new Uint8Array(32)));
+      const verifier = b64(crypto.getRandomValues(new Uint8Array(32)));
+      const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(verifier))));
+      const flow = await seal({ state, verifier, expires: Date.now() + 600000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID }, env, 'oauth-flow');
+      const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      auth.search = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: env.SITE_ORIGIN + '/', response_type: 'code', scope: SCOPE, state, code_challenge: challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'consent' });
+      return reply({ authorization_url: auth.href }, 200, flowCookie(b64(encoder.encode(flow))));
+    }
     if (path === '/api/google/exchange') {
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) return reply({ error: 'Invalid request format' }, 400);
       stage = 'request_body_unavailable';
@@ -138,7 +185,8 @@ export async function handleSession(request, env) {
 
 export default {
   async fetch(request, env) {
-    if (new URL(request.url).pathname.startsWith('/api/google/')) return handleSession(request, env);
+    const url = new URL(request.url);
+    if (url.pathname.startsWith('/api/google/') || (url.pathname === '/' && (url.searchParams.has('code') || url.searchParams.has('error')))) return handleSession(request, env);
     return env.ASSETS.fetch(request);
   }
 };

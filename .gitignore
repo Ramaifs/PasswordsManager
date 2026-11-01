@@ -19,3 +19,6 @@ __pycache__/
 *.pmvault
 src/password_manager/google-desktop.json
 .aws/
+/deployment/android-signing/
+*.jks
+*.keystore

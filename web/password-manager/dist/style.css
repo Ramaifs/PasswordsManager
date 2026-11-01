@@ -33,3 +33,4 @@
 .color-setting{display:flex;align-items:center;gap:10px}.color-setting input{flex:1}.color-setting button{white-space:nowrap}
 
 .record.selected{border-color:var(--accent);background:var(--hover)}.remove-field{float:right;font-size:18px;line-height:18px;padding:0 8px;color:var(--danger)}.record-context-menu{position:fixed;z-index:60;min-width:220px;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px;box-shadow:var(--shadow)}.record-context-menu small{display:block;color:var(--muted);padding:5px}.record-context-menu button{display:block;width:100%;text-align:left;margin-top:4px;font-size:12px}
+.download-apk{display:inline-block;border:1px solid var(--line);border-radius:7px;padding:5px 9px;color:var(--text);text-decoration:none}.download-apk:hover{background:var(--hover)}

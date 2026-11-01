@@ -90,6 +90,11 @@ function sidebar() {
 }
 function shell(content, page = 'Хранилища') {
   app.innerHTML = `<div class="layout">${sidebar()}<main class="main"><header class="topbar"><div class="breadcrumb">${icon('vault')}<span>Ваше пространство</span><span>/</span><span>${esc(page)}</span></div><div class="top-status"><span class="status-dot"></span>Локальное шифрование</div></header>${content}<footer class="bottom-line"><span>Ваши пароли. Только ваш доступ.</span><span>Argon2id · AES-256-GCM</span></footer></main></div>`;
+  const apk = document.createElement('a');
+  apk.href = 'https://github.com/Ramaifs/PasswordsManager/releases/download/v0.41/PasswordManager-0.41-android.apk';
+  apk.target = '_blank'; apk.rel = 'noopener noreferrer';
+  apk.className = 'download-apk'; apk.textContent = 'Android · скачать APK';
+  document.querySelector('.bottom-line').append(apk);
 }
 function home() {
   state.view = 'home'; state.create = null;
@@ -469,16 +474,23 @@ function driveDialog() {
     ${!connected() ? `<p>Войдите в Google и разрешите доступ к файлам приложения.</p><button id="google-connect" class="primary" data-action="drive-connect" disabled>Подготовка входа…</button>` : `<p>${esc(driveIdentity?.email || state.record?.drive?.email || 'Google подключён')}</p><div class="inline-actions">${state.doc ? '<button class="primary" data-action="drive-sync">Сохранить и синхронизировать</button><button class="secondary" data-action="drive-conflicts">Конфликты</button>' : ''}<button class="secondary" data-action="drive-list">Все копии Google Drive</button><button class="quiet" data-action="drive-disconnect">Отключить Google</button></div>`}
     <p id="form-error" class="form-error"></p><p class="notice">${persistentSessionEnabled() ? 'Подключение Google запоминается на срок до 30 дней и восстанавливается после перезагрузки. Отключение Google завершает сохранённую сессию.' : 'Длительный вход на этом сайте пока недоступен. Подключение сохраняется при блокировке хранилища; после перезагрузки или истечения доступа Google может запросить повторный вход.'} При ошибке сети скачайте .pmvault перед закрытием.</p>`);
   const control = document.querySelector('#google-connect');
+  if (control && persistentSessionEnabled()) {
+    const fallback = document.createElement('button');
+    fallback.className = 'secondary'; fallback.textContent = 'Войти без всплывающего окна';
+    fallback.dataset.action = 'drive-connect'; fallback.dataset.redirect = 'true';
+    control.after(fallback);
+  }
   if (control) void loadGoogle().then(() => {
     if (modal.contains(control)) { control.textContent = 'Войти в Google'; control.disabled = false; }
   }).catch(e => {
     if (modal.contains(control)) { control.textContent = 'Повторить подготовку'; control.dataset.action = 'drive-settings'; control.disabled = false; error(e.message); }
   });
 }
-async function connectDrive() {
+async function connectDrive(node) {
   oauthPending = true;
   try {
-    await authorize(GOOGLE_WEB_CLIENT_ID);
+    const result = await authorize(GOOGLE_WEB_CLIENT_ID, { redirect: node?.dataset?.redirect === 'true', preservePage: !!state.record });
+    if (result === null) return;
     driveCache.clear();
     driveIdentity = await (await driveTransport()).identity();
     if (state.doc) { closeModal(); await syncDrive(); driveDialog(); }
@@ -797,5 +809,5 @@ setInterval(checkAutoSync, 1000);
 // Returning to the tab checks elapsed inactivity; hiding it never locks immediately.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !oauthPending) checkIdle(); });
 document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'l' && (e.ctrlKey || e.metaKey) && e.shiftKey && state.token) { e.preventDefault(); safe(lock); } });
-try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); await initializeGoogleSession(GOOGLE_WEB_CLIENT_ID); await refreshRecent(); if (!state.recent.length && !oldVaults.length && !connected()) newVault(); else home(); }
+try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); const loginResult = new URL(location.href).searchParams.get('google'); if (loginResult) history.replaceState(null, '', '/'); await initializeGoogleSession(GOOGLE_WEB_CLIENT_ID); await refreshRecent(); if (!state.recent.length && !oldVaults.length && !connected()) newVault(); else home(); if (loginResult === 'connected' && connected()) driveDialog(); else if (loginResult) toast('Вход Google не завершён. Повторите подключение; при ошибке адреса возврата проверьте настройки Web OAuth-клиента.'); }
 catch (e) { shell(`<section class="welcome"><h1>Не удалось открыть пространство</h1><p class="intro">${esc(e.message)}</p><button class="secondary" data-action="help">Как это работает</button></section>`); }

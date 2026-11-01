@@ -20,6 +20,11 @@
 
 Данные хранятся отдельно от программы: `%LOCALAPPDATA%\PersonalPasswordManager`. При создании хранилища сохраните ключ восстановления отдельно. Подробности — в [инструкции пользователя](USER_GUIDE.md).
 
+Android 0.41: [скачать APK](https://github.com/Ramaifs/PasswordsManager/releases/download/v0.41/PasswordManager-0.41-android.apk).
+Это [клиент сайта через системный браузер](android/README.md), для загрузки нужен интернет.
+На Android/iOS доступен Google-вход без всплывающего окна; открытое хранилище
+остаётся в исходной вкладке. На iOS используйте сайт в Safari.
+
 Локальная сборка 0.41: `releases/0.41/PasswordsManager.exe` и `releases/0.41/PasswordManager-0.41-portable.zip`. Для длительного входа Google на сайте нужна [настройка Worker](deployment/cloudflare-worker/README.md).
 
 ## Разработка

@@ -6,6 +6,15 @@ Worker обслуживает статический сайт и четыре OA
 
 ## Настройка
 
+Мобильный вход (дополнение 0.41): разрешите в Web OAuth-клиенте точный
+Authorized redirect URI `https://password-manager-vault.masaoyhs.workers.dev/`.
+`POST /api/google/start` проверяет Origin и CSRF-заголовок, создаёт случайные
+state/PKCE и шифрованный HttpOnly cookie на 10 минут (`SameSite=Lax` для возврата
+с Google). Callback на `/` проверяет cookie, state, срок, origin и client ID,
+обменивает код и удаляет его из адресной строки редиректом до загрузки assets.
+Refresh token остаётся только в зашифрованной серверной сессии. Старая popup-схема
+для ПК сохранена. Перед развёртыванием обновления запустите Node-тесты сайта.
+
 1. Для Web OAuth-клиента разрешите HTTPS origin сайта. Client ID в `wrangler.jsonc` и `web/password-manager/dist/oauth-config.js` должен совпадать.
 2. Создайте KV namespace и замените `REPLACE_WITH_KV_NAMESPACE_ID` в `wrangler.jsonc` его ID. Binding — `GOOGLE_SESSIONS`.
 3. Задайте `SITE_ORIGIN` точным origin сайта без завершающего `/`.
