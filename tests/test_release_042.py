@@ -77,14 +77,31 @@ def test_wheel_requires_click_and_loses_permission_on_focus_out(window):
     assert control.value() == 6
 
 
-def test_danger_actions_are_last_and_sync_success_is_green(window, monkeypatch):
+def test_deletion_category_opens_actions_and_keeps_updates_below(window, monkeypatch):
+    from PySide6.QtWidgets import QCheckBox
+    actions = ['Удалить облачные версии', 'Удалить локальное сохранение', 'Удалить приложение']
+    opened = []
     def inspect(dialog):
-        buttons = [b.text() for b in dialog.findChildren(QPushButton)]
-        actions = ['Удалить облачные версии', 'Удалить локальное сохранение', 'Удалить приложение']
-        assert buttons[-4:-1] == actions
-        assert buttons.index('Объединить файл') < buttons.index(actions[0])
+        buttons = dialog.findChildren(QPushButton)
+        labels = [button.text() for button in buttons]
+        if dialog.objectName() == 'deletionSettings':
+            opened.append(dialog.windowTitle())
+            assert labels[:3] == actions
+            assert all(button.objectName() == 'danger' for button in buttons[:3])
+            return
+        assert not set(actions).intersection(labels), 'Deletion actions leaked into the main settings list'
+        category = next(button for button in buttons if button.text() == 'Удаление/Отключение')
+        assert category.objectName() == 'danger'
+        assert labels.index('Объединить файл') < labels.index(category.text()) < labels.index('Проверить обновления') < labels.index('Сохранить')
+        updates = next(box for box in dialog.findChildren(QCheckBox) if box.text() == 'Проверять обновления при запуске')
+        assert category.parentWidget().layout().indexOf(category) < category.parentWidget().layout().indexOf(updates)
+        updates.setChecked(False)
+        category.click()
+        assert opened == ['Удаление/Отключение']
+        next(button for button in buttons if button.text() == 'Сохранить').click()
     monkeypatch.setattr(QDialog, 'exec', inspect)
     window.settings()
+    assert window.session.document['settings']['check_updates'] is False
     window.toast('Синхронизация выполнена!')
     assert '#48bf7b' in window.toast_label.styleSheet()
     window.toast('Синхронизация..')

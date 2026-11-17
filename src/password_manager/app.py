@@ -1564,11 +1564,6 @@ class Window(QMainWindow):
         form.addRow("Интервал в минутах", sync)
         layout.addLayout(form)
         separator()
-        check_updates = QCheckBox("Проверять обновления при запуске")
-        check_updates.setChecked(values.get("check_updates", True))
-        layout.addWidget(check_updates)
-        action("Проверить обновления", lambda: self.updates.check(manual=True))
-        separator()
         name = QLineEdit(values.get("vault_name", "Main"))
         name.setMaxLength(100)
         name_form = QFormLayout()
@@ -1577,13 +1572,15 @@ class Window(QMainWindow):
         for label, callback in [("Импорт JSON", self.import_json), ("Экспорт", self.export), ("Резервные копии", self.backups), ("Конфликты синхронизации", self.resolve_conflicts), ("Объединить файл", self.merge_encrypted)]:
             action(label, callback)
         separator()
+        danger = button("Удаление/Отключение", lambda: self.deletion_settings(dialog), layout)
+        danger.setObjectName("danger")
+        danger.setStyleSheet("color: #e45b68; text-align: left; padding: 10px 12px; border: 1px solid #ae4652; border-radius: 7px;")
         separator()
-        danger = QLabel("Удаление")
-        danger.setStyleSheet("color: #e45b68; font-size: 18px; font-weight: 600;")
-        layout.addWidget(danger)
-        for label, callback in [("Удалить облачные версии", self.cloud.delete_cloud), ("Удалить локальное сохранение", self.delete_local_save), ("Удалить приложение", self.uninstall_application)]:
-            control = action(label, callback)
-            control.setStyleSheet("color: #e45b68; text-align: left; padding: 10px 12px; border: 1px solid #ae4652; border-radius: 7px;")
+        check_updates = QCheckBox("Проверять обновления при запуске")
+        check_updates.setChecked(values.get("check_updates", True))
+        layout.addWidget(check_updates)
+        action("Проверить обновления", lambda: self.updates.check(manual=True))
+        separator()
         layout.addStretch()
         def save_settings():
             if not self.session.unlocked:
@@ -1600,6 +1597,25 @@ class Window(QMainWindow):
             dialog.accept()
         button("Сохранить", lambda: self.safe(save_settings), layout).setObjectName("primary")
         dialog.exec()
+
+    def deletion_settings(self, parent=None):
+        dialog = QDialog(parent or self)
+        dialog.setObjectName("deletionSettings")
+        dialog.setWindowTitle("Удаление/Отключение")
+        dialog.setMinimumWidth(430)
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
+        def run(callback):
+            self.safe(callback)
+            if not self.session.unlocked:
+                dialog.reject()
+        for label, callback in [("Удалить облачные версии", self.cloud.delete_cloud), ("Удалить локальное сохранение", self.delete_local_save), ("Удалить приложение", self.uninstall_application)]:
+            control = button(label, lambda _checked=False, action=callback: run(action), layout)
+            control.setObjectName("danger")
+            control.setStyleSheet("color: #e45b68; text-align: left; padding: 10px 12px; border: 1px solid #ae4652; border-radius: 7px;")
+        button("Назад", dialog.reject, layout)
+        dialog.exec()
+        dialog.deleteLater()
 
     def delete_local_save(self):
         if self.cloud.busy:
