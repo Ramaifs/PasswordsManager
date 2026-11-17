@@ -88,23 +88,99 @@ public final class MainActivity extends Activity {
   File file=new File(getFilesDir(),"google-session.json");if(!file.exists())return "";
   JSONObject box=new JSONObject(new String(read(new AtomicFile(file).openRead(),8192),StandardCharsets.UTF_8));Cipher c=Cipher.getInstance("AES/GCM/NoPadding");c.init(Cipher.DECRYPT_MODE,sessionKey(),new GCMParameterSpec(128,Base64.decode(box.getString("iv"),Base64.NO_WRAP)));return new String(c.doFinal(Base64.decode(box.getString("data"),Base64.NO_WRAP)),StandardCharsets.UTF_8);
  }
- private JSONObject auth(String path,String body)throws Exception{
-  if(!path.equals("pair")&&!path.equals("token")&&!path.equals("logout"))throw new IOException("Invalid route");
-  HttpURLConnection c=(HttpURLConnection)new URL(SERVICE+"/api/android/"+path).openConnection();
-  try{c.setConnectTimeout(15000);c.setReadTimeout(25000);c.setInstanceFollowRedirects(false);c.setRequestMethod("POST");c.setRequestProperty("Content-Type","application/json");if(!path.equals("pair"))c.setRequestProperty("Authorization","Bearer "+session());c.setDoOutput(true);try(OutputStream out=c.getOutputStream()){out.write(body.getBytes(StandardCharsets.UTF_8));}
-   int status=c.getResponseCode();if(path.equals("logout"))new AtomicFile(new File(getFilesDir(),"google-session.json")).delete();
-   if(status!=200)throw new IOException("Google session unavailable");
-   JSONObject value=new JSONObject(new String(read(c.getInputStream(),65536),StandardCharsets.UTF_8));
-   if(path.equals("pair")&&value.has("session")){saveSession(value.getString("session"));value.remove("session");value.put("paired",true);}return value;
-  }finally{c.disconnect();}
+ private static final class AuthFailure extends IOException {
+  final String code;
+  AuthFailure(String code, String message) { super(message); this.code = code; }
+ }
+ private AuthFailure authHttpFailure(String path, HttpURLConnection connection, int status) {
+  String detail = "";
+  try {
+   InputStream error = connection.getErrorStream();
+   if (error != null) detail = new JSONObject(new String(read(error, 8192), StandardCharsets.UTF_8)).optString("error");
+  } catch (IOException | JSONException ignored) {
+   // Display only the HTTP status if the server response is not a supported JSON error.
+  }
+  if (status == 401) {
+   if ("oauth_invalid_grant".equals(detail) || "Reconnect Google to continue".equals(detail)) {
+    return new AuthFailure("access_revoked", "Google отозвал доступ. Подключите Google Drive заново [TOKEN-REVOKED].");
+   }
+   if ("Google session expired".equals(detail)) {
+    return new AuthFailure("session_expired", "Сессия Google Drive недоступна. Подключите Google Drive заново [TOKEN-401].");
+   }
+  }
+  if ("oauth_invalid_client".equals(detail)) {
+   return new AuthFailure("service_config", "Сервис Google Drive отклонил настройки входа [" + path.toUpperCase(java.util.Locale.ROOT) + "-CONFIG].");
+  }
+  return new AuthFailure("http_error", "Сервис подключения Google Drive вернул ошибку [" + path.toUpperCase(java.util.Locale.ROOT) + "-HTTP-" + status + "].");
+ }
+ private JSONObject auth(String path, String body) throws Exception {
+  if (!path.equals("pair") && !path.equals("token") && !path.equals("logout")) throw new IOException("Invalid route");
+  String sessionId = "";
+  if (!path.equals("pair")) {
+   try {
+    sessionId = session();
+   } catch (Exception error) {
+    throw new AuthFailure("session_read", "Не удалось прочитать защищённую сессию. Подключите Google Drive заново [SESSION-READ].");
+   }
+  }
+  HttpURLConnection connection = (HttpURLConnection) new URL(SERVICE + "/api/android/" + path).openConnection();
+  try {
+   connection.setConnectTimeout(15000);
+   connection.setReadTimeout(25000);
+   connection.setInstanceFollowRedirects(false);
+   connection.setRequestMethod("POST");
+   connection.setRequestProperty("Content-Type", "application/json");
+   if (!sessionId.isEmpty()) connection.setRequestProperty("Authorization", "Bearer " + sessionId);
+   connection.setDoOutput(true);
+   try (OutputStream output = connection.getOutputStream()) {
+    output.write(body.getBytes(StandardCharsets.UTF_8));
+   }
+   int status = connection.getResponseCode();
+   if (path.equals("logout") && (status == 200 || status == 401)) {
+    new AtomicFile(new File(getFilesDir(), "google-session.json")).delete();
+    return new JSONObject().put("success", true);
+   }
+   if (status != 200) throw authHttpFailure(path, connection, status);
+   JSONObject value = new JSONObject(new String(read(connection.getInputStream(), 65536), StandardCharsets.UTF_8));
+   if (path.equals("pair") && value.has("session")) {
+    try {
+     saveSession(value.getString("session"));
+    } catch (Exception error) {
+     throw new AuthFailure("session_write", "Android не смог сохранить защищённую сессию Google Drive [SESSION-WRITE].");
+    }
+    value.remove("session");
+    value.put("paired", true);
+   }
+   return value;
+  } finally {
+   connection.disconnect();
+  }
  }
  private final class Bridge{
   @JavascriptInterface public synchronized String readVaults(){try{File f=new File(getFilesDir(),"vaults.json");return f.exists()?new String(read(new AtomicFile(f).openRead(),64*1024*1024),StandardCharsets.UTF_8):"[]";}catch(Exception e){return "{\"error\":\"Не удалось прочитать сохранение. Исходные данные не перезаписаны.\"}";}}
   @JavascriptInterface public synchronized String writeVaults(String encrypted){try{byte[] bytes=encrypted.getBytes(StandardCharsets.UTF_8);if(bytes.length>64*1024*1024)throw new IOException();new JSONArray(encrypted);atomic("vaults.json",bytes);return "{}";}catch(Exception e){return "{\"error\":\"Не удалось сохранить хранилище. Освободите место и повторите.\"}";}}
-  @JavascriptInterface public void authRequest(String id,String path,String body){if(!id.matches("[0-9a-f-]{36}")||body.length()>4096)return;network.execute(()->{
-   JSONObject result;try{result=new JSONObject().put("value",auth(path,body));}catch(Exception e){result=new JSONObject();try{result.put("error","Google Drive недоступен. Проверьте интернет или повторите подключение.");}catch(Exception ignored){}}
-   String script="window.pmAuthResult("+JSONObject.quote(id)+","+result.toString()+")";runOnUiThread(()->{if(!isFinishing())web.evaluateJavascript(script,null);});
-  });}
+  @JavascriptInterface public void authRequest(String id, String path, String body) {
+   if (!id.matches("[0-9a-f-]{36}") || body.length() > 4096) return;
+   if (!path.equals("pair") && !path.equals("token") && !path.equals("logout")) return;
+   network.execute(() -> {
+    JSONObject result = new JSONObject();
+    try {
+     try {
+      result.put("value", auth(path, body));
+     } catch (AuthFailure error) {
+      result.put("error", error.getMessage()).put("code", error.code);
+     } catch (Exception error) {
+      String step = path.toUpperCase(java.util.Locale.ROOT);
+      String kind = error instanceof JSONException ? "RESPONSE" : "NETWORK";
+      result.put("error", "Не удалось завершить подключение Google Drive [" + step + "-" + kind + "].");
+     }
+    } catch (JSONException ignored) {
+     return;
+    }
+    String script = "window.pmAuthResult(" + JSONObject.quote(id) + "," + result + ")";
+    runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) web.evaluateJavascript(script, null); });
+   });
+  }
   @JavascriptInterface public boolean hasSession(){return new File(getFilesDir(),"google-session.json").exists();}
   @JavascriptInterface public void connect(String state,String challenge){if(!state.matches("[A-Za-z0-9_-]{43}")||!challenge.matches("[A-Za-z0-9_-]{43}"))return;runOnUiThread(()->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(SERVICE+"/api/android/connect?state="+state+"&challenge="+challenge)));}catch(Exception e){new AlertDialog.Builder(MainActivity.this).setMessage("Для подключения Google нужен системный браузер.").setPositiveButton("OK",null).show();}});}
   @JavascriptInterface public void exportFile(String encoded,String name){if(encoded.length()>24*1024*1024)return;byte[] bytes=Base64.decode(encoded,Base64.DEFAULT);runOnUiThread(()->{if(exporting!=null)return;exporting=bytes;startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,name.replaceAll("[/\\\\]","_")),11);});}

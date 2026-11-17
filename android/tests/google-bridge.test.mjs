@@ -14,3 +14,33 @@ test('saved native session renews without browser, new pairing uses secret verif
  const expected=Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(pair.body.verifier))).toString('base64url');assert.equal(opened.challenge,expected);
  await google.disconnectGoogle();assert(!google.connected());assert.throws(()=>google.accessToken());
 });
+
+test('fresh pairing retries a briefly unavailable session and replaces the old account token', async () => {
+ const calls = [];
+ let tokenRequests = 0;
+ AndroidVault.authRequest = (id, path) => {
+  calls.push(path);
+  if (path === 'pair') return queueMicrotask(() => window.pmAuthResult(id, {value:{paired:true}}));
+  const count = ++tokenRequests;
+  queueMicrotask(() => window.pmAuthResult(id, count === 2
+    ? {error:'Session not visible yet',code:'session_expired'}
+    : {value:{access_token:count === 1 ? 'OLD' : 'NEW',expires_in:3600}}));
+ };
+ const client = await import('../assets/ui/google.js?fresh-pairing');
+ assert.equal(await client.ensureAccessToken(),'OLD');
+ assert.equal(await client.authorize(),'NEW');
+ assert.deepEqual(calls,['token','pair','token','token']);
+});
+
+test('a revoked saved Google session allows sign-in again without retrying the rejected token', async () => {
+ let calls = 0;
+ AndroidVault.authRequest = id => {
+  calls++;
+  queueMicrotask(() => window.pmAuthResult(id,{error:'Reconnect Google',code:'access_revoked'}));
+ };
+ const client = await import('../assets/ui/google.js?revoked');
+ await assert.rejects(client.ensureAccessToken(),{code:'access_revoked'});
+ assert.equal(client.connected(), false);
+ await assert.rejects(client.ensureAccessToken(),/Подключите Google Drive/);
+ assert.equal(calls,1);
+});
