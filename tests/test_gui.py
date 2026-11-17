@@ -273,6 +273,8 @@ def test_update_dialog_downloads_and_enables_install_without_launch(window, monk
     from PySide6.QtTest import QTest
     import password_manager.updates as updates
     import time
+    from password_manager import __version__
+    current_release = {'tag': 'v' + __version__, 'version': __version__}
     calls = []
     def download(release, root, **kwargs):
         calls.append(release)
@@ -292,12 +294,12 @@ def test_update_dialog_downloads_and_enables_install_without_launch(window, monk
             QTest.qWait(10)
         QApplication.processEvents()
         assert install.isEnabled()
-        assert calls == [{'tag': 'v0.42', 'version': '0.42'}]
+        assert calls == [current_release]
         versions.setCurrentIndex(1)
         assert not install.isEnabled() and window.updates.downloaded is None
         dialog.reject()
     monkeypatch.setattr(QDialog, 'exec', inspect)
-    window.updates.show_versions([{'tag': 'v0.42', 'version': '0.42'}, {'tag': 'v0.40', 'version': '0.40'}])
+    window.updates.show_versions([current_release, {'tag': 'v0.40', 'version': '0.40'}])
 
 
 def test_new_entry_uses_selected_category_and_subcategory(window):
