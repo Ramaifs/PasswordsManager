@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createVault, encodeVault, inspect, b64 } from '../assets/ui/core.js';
+let disk='[]',fail=false;
+globalThis.AndroidVault={readVaults:()=>disk,writeVaults:bytes=>{if(fail)return JSON.stringify({error:'Disk full'});disk=bytes;return '{}';}};
+const storage=await import('../assets/ui/storage.js');
+test('encrypted local state survives reload, write failure rolls back, deletion removes history',async()=>{
+ const made=await createVault('Fictional offline password');
+ made.blob=await encodeVault(made.access,made.document);
+ const record=await storage.putVault({id:crypto.randomUUID(),name:'Fictional',blob:made.blob,backups:[],updatedAt:new Date().toISOString()});
+ assert(!disk.includes('Fictional offline password'));
+ assert.equal(inspect(record.blob).header.vault_id,made.access.header.vault_id);
+ const restored=await import('../assets/ui/storage.js?reload');
+ assert.deepEqual((await restored.getVault(record.id)).blob,record.blob);
+ const withHistory=await storage.saveSnapshot(record,made.blob);
+ const reloaded=await import('../assets/ui/storage.js?history');
+ assert.equal((await reloaded.getVault(record.id)).backups.length,1);
+ const before=disk;fail=true;
+ await assert.rejects(storage.putVault({...withHistory,name:'Changed'}),/Disk full/);
+ assert.equal((await storage.getVault(record.id)).name,'Fictional');assert.equal(disk,before);
+ await assert.rejects(storage.forgetVault(record.id),/Disk full/);assert(await storage.getVault(record.id));
+ fail=false;await storage.forgetVault(record.id);assert.equal(disk,'[]');
+});

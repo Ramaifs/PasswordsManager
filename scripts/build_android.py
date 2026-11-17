@@ -1,4 +1,4 @@
-"""Build and verify the browser-backed APK using an existing Android SDK/JDK.
+"""Build and verify the standalone offline APK using an existing Android SDK/JDK.
 
 No downloads, installation, emulator launch or publication. The signing identity is
 reused across builds; its password is DPAPI-protected for the current Windows user.
@@ -14,15 +14,32 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 
-from password_manager.protected import _dpapi
+import ctypes
+from ctypes import wintypes
+
+def _dpapi(data, decrypt=False):
+    class Blob(ctypes.Structure):
+        _fields_ = [('size', wintypes.DWORD), ('data', ctypes.POINTER(ctypes.c_ubyte))]
+    buffer = ctypes.create_string_buffer(data)
+    incoming = Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_ubyte)))
+    outgoing = Blob()
+    crypt = ctypes.windll.crypt32.CryptUnprotectData if decrypt else ctypes.windll.crypt32.CryptProtectData
+    if not crypt(ctypes.byref(incoming), None, None, None, None, 1, ctypes.byref(outgoing)):
+        raise OSError('Original Android signing password is unavailable for this Windows profile. Restore the original signing identity; it will not be replaced.')
+    try:
+        return ctypes.string_at(outgoing.data, outgoing.size)
+    finally:
+        ctypes.windll.kernel32.LocalFree(outgoing.data)
+
 
 ROOT = Path(__file__).resolve().parents[1]
-UNITY = Path("C:/Program Files/Unity/Hub/Editor/2022.3.22f1/Editor/Data/PlaybackEngines/AndroidPlayer")
+UNITY = Path("D:/Programs/UnityHub/Editor/2022.3.22f1/Editor/Data/PlaybackEngines/AndroidPlayer")
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--sdk', type=Path, default=os.environ.get('ANDROID_HOME', UNITY / 'SDK'))
 parser.add_argument('--jdk', type=Path, default=os.environ.get('JAVA_HOME', UNITY / 'OpenJDK'))
 parser.add_argument('--platform', default='android-32')
 parser.add_argument('--build-tools', default='32.0.0')
+parser.add_argument('--replacement-key', action='store_true', help='Reuse the separately authorized current-profile key; old APK must be uninstalled')
 args = parser.parse_args()
 tools = args.sdk / 'build-tools' / args.build_tools
 platform = args.sdk / 'platforms' / args.platform / 'android.jar'
@@ -48,15 +65,15 @@ def run(*command):
         raise RuntimeError(f'{Path(str(command[0])).name} exited {result.returncode}\n{result.stdout}\n{result.stderr}')
     return result.stdout
 
-run(tools / 'aapt.exe', 'package', '-f', '-M', manifest, '-S', ROOT / 'android/res', '-I', platform, '-F', work / 'resources.apk', '-J', work / 'gen')
+run(tools / 'aapt.exe', 'package', '-f', '-M', manifest, '-S', ROOT / 'android/res', '-A', ROOT / 'android/assets', '-I', platform, '-F', work / 'resources.apk', '-J', work / 'gen')
 sources = sorted((ROOT / 'android/src').rglob('*.java')) + sorted((work / 'gen').rglob('*.java'))
 run(javac, '-encoding', 'UTF-8', '--release', '8', '-classpath', platform, '-d', work / 'classes', *sources)
-run(java, '-cp', tools / 'lib/d8.jar', 'com.android.tools.r8.D8', '--lib', platform, '--min-api', '23', '--output', work / 'dex', *sorted((work / 'classes').rglob('*.class')))
+run(java, '-cp', tools / 'lib/d8.jar', 'com.android.tools.r8.D8', '--lib', platform, '--min-api', '26', '--output', work / 'dex', *sorted((work / 'classes').rglob('*.class')))
 with zipfile.ZipFile(work / 'resources.apk', 'a', zipfile.ZIP_DEFLATED) as archive:
     archive.write(work / 'dex/classes.dex', 'classes.dex')
 run(tools / 'zipalign.exe', '-f', '4', work / 'resources.apk', work / 'aligned.apk')
 
-identity = ROOT / 'deployment/android-signing'
+identity = ROOT / ('build/android-development-signing' if args.replacement_key else 'deployment/android-signing')
 identity.mkdir(parents=True, exist_ok=True)
 keystore, password_file = identity / 'release.keystore', identity / 'password.dpapi'
 if keystore.exists() != password_file.exists():
@@ -76,13 +93,16 @@ with zipfile.ZipFile(apk) as archive:
     assert archive.testzip() is None
     assert {'AndroidManifest.xml', 'classes.dex', 'resources.arsc'} <= set(archive.namelist())
 report = {
-    'version': version, 'package': 'com.ramaifs.passwordmanager', 'kind': 'browser-backed Android client (Custom Tabs, HTTPS site)',
+    'version': version, 'package': 'com.ramaifs.passwordmanager', 'kind': 'offline bundled interface, encrypted local vaults, Google Drive sync',
     'apk': apk.relative_to(ROOT).as_posix(), 'bytes': apk.stat().st_size,
     'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
     'signature_verification': verification, 'badging': badging,
     'input_hashes': {p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((ROOT / 'android').rglob('*')) if p.is_file()},
-    'device_tested': False, 'published': False,
+    'device_tested': False, 'published': False, 'signature_changed': args.replacement_key, 'requires_old_apk_uninstall': args.replacement_key,
 }
-(out / 'android-manifest.json').write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
+(ROOT / 'artifacts' / ('android-' + version + '-manifest.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 print(json.dumps({k: report[k] for k in ('version', 'apk', 'bytes', 'sha256', 'device_tested')}, indent=2))
+idsig = apk.with_suffix(apk.suffix + '.idsig')
+if idsig.exists():
+    idsig.replace(ROOT / 'artifacts' / (apk.name + '.idsig'))
 print(verification)

@@ -9,7 +9,7 @@ import webbrowser
 
 from .crypto import canonical, parse
 from .errors import VaultError
-from .http_client import json_request
+from .http_client import json_request, HttpError
 from .storage import read_bounded
 
 SCOPE = "https://www.googleapis.com/auth/drive.file"
@@ -109,8 +109,13 @@ def bearer(connection, *, request=json_request):
     if value.get("expires_at", 0) <= time.time():
         payload = {"client_id": value["client_id"], "client_secret": value["client_secret"],
                    "refresh_token": value["refresh_token"], "grant_type": "refresh_token"}
-        token = request("POST", TOKEN, headers={"Content-Type": "application/x-www-form-urlencoded"},
-                        body=urllib.parse.urlencode(payload).encode(), limit=65536)
+        try:
+            token = request("POST", TOKEN, headers={"Content-Type": "application/x-www-form-urlencoded"},
+                            body=urllib.parse.urlencode(payload).encode(), limit=65536)
+        except HttpError as error:
+            if error.status in (400, 401):
+                raise VaultError("Google отклонил продление доступа. Подключите Google заново: Google Drive → Отключить Google → Подключить Google. Локальное хранилище и облачные файлы сохраняются.") from None
+            raise
         validate_token(token)
         value["access_token"] = token["access_token"]
         value["expires_at"] = time.time() + int(token.get("expires_in", 3600)) - 60

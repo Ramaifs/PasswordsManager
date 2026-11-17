@@ -25,6 +25,17 @@ def run(output):
         QFontDatabase.addApplicationFont(str(font))
         app.setFont(QFont("Segoe UI", 10))
     configure_app(app)
+    from PySide6.QtWidgets import QCheckBox
+    from .theme import stylesheet
+    check = QCheckBox()
+    check.setStyleSheet(stylesheet(True, "#663399"))
+    check.setChecked(True)
+    check.resize(30, 30)
+    check.show()
+    app.processEvents()
+    pixels = check.grab().toImage()
+    assert sum(1 for x in range(3, 19) for y in range(7, 23) if all(v > 220 for v in pixels.pixelColor(x, y).getRgb()[:3])) >= 3, "Packaged checkbox tick missing"
+    check.close()
     results = {"version": __version__, "level": "offscreen smoke", "frozen": bool(getattr(sys, "frozen", False)),
                "executable": sys.executable, "checks": []}
     try:

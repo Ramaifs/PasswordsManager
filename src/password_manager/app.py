@@ -43,6 +43,30 @@ class NumberInput(QSpinBox):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.lineEdit().setTextMargins(11, 0, 0, 0)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._wheel_selected = False
+        self.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            self._wheel_selected = True
+        elif event.type() == QEvent.Type.FocusOut:
+            self._wheel_selected = False
+        return super().eventFilter(watched, event)
+
+    def mousePressEvent(self, event):
+        self._wheel_selected = True
+        super().mousePressEvent(event)
+
+    def focusOutEvent(self, event):
+        self._wheel_selected = False
+        super().focusOutEvent(event)
+
+    def wheelEvent(self, event):
+        if self._wheel_selected and self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
 
 
 class WindowsEvents(QAbstractNativeEventFilter):
@@ -109,6 +133,11 @@ class Window(QMainWindow):
             register.argtypes, register.restype = [HWND, DWORD], BOOL
             self.wts_registered = bool(register(int(self.winId()), 0))
         self.show_locked()
+        QApplication.instance().applicationStateChanged.connect(self.application_state_changed)
+
+    def application_state_changed(self, state):
+        if state == Qt.ApplicationState.ApplicationActive:
+            self.cloud.request_remote_check()
 
     def toast(self, text, persistent=False):
         if not hasattr(self, "toast_label"):
@@ -117,6 +146,8 @@ class Window(QMainWindow):
             self.toast_timer = QTimer(self)
             self.toast_timer.setSingleShot(True)
             self.toast_timer.timeout.connect(self.toast_label.hide)
+        color = "#48bf7b" if text.startswith("Синхронизация выполнена!") else "#ff9900"
+        self.toast_label.setStyleSheet(f"QLabel {{ background: #292637; color: {color}; border: 1px solid #9b87f5; border-radius: 8px; padding: 14px 20px; }}")
         self.toast_timer.stop()
         self.toast_label.setText(text)
         self.toast_label.adjustSize()
@@ -347,6 +378,7 @@ class Window(QMainWindow):
         self.master.clear()
         self.last_activity = time.monotonic()
         self.build_editor()
+        self.cloud.request_remote_check()
         if created:
             self.toast("Хранилище создано. Для облачной копии подключите Google Drive в настройках.")
 
@@ -1532,6 +1564,11 @@ class Window(QMainWindow):
         form.addRow("Интервал в минутах", sync)
         layout.addLayout(form)
         separator()
+        check_updates = QCheckBox("Проверять обновления при запуске")
+        check_updates.setChecked(values.get("check_updates", True))
+        layout.addWidget(check_updates)
+        action("Проверить обновления", lambda: self.updates.check(manual=True))
+        separator()
         name = QLineEdit(values.get("vault_name", "Main"))
         name.setMaxLength(100)
         name_form = QFormLayout()
@@ -1540,10 +1577,13 @@ class Window(QMainWindow):
         for label, callback in [("Импорт JSON", self.import_json), ("Экспорт", self.export), ("Резервные копии", self.backups), ("Конфликты синхронизации", self.resolve_conflicts), ("Объединить файл", self.merge_encrypted)]:
             action(label, callback)
         separator()
-        check_updates = QCheckBox("Проверять обновления при запуске")
-        check_updates.setChecked(values.get("check_updates", True))
-        layout.addWidget(check_updates)
-        action("Проверить обновления", lambda: self.updates.check(manual=True))
+        separator()
+        danger = QLabel("Удаление")
+        danger.setStyleSheet("color: #e45b68; font-size: 18px; font-weight: 600;")
+        layout.addWidget(danger)
+        for label, callback in [("Удалить облачные версии", self.cloud.delete_cloud), ("Удалить локальное сохранение", self.delete_local_save), ("Удалить приложение", self.uninstall_application)]:
+            control = action(label, callback)
+            control.setStyleSheet("color: #e45b68; text-align: left; padding: 10px 12px; border: 1px solid #ae4652; border-radius: 7px;")
         layout.addStretch()
         def save_settings():
             if not self.session.unlocked:
@@ -1560,6 +1600,28 @@ class Window(QMainWindow):
             dialog.accept()
         button("Сохранить", lambda: self.safe(save_settings), layout).setObjectName("primary")
         dialog.exec()
+
+    def delete_local_save(self):
+        if self.cloud.busy:
+            raise VaultError("Дождитесь завершения синхронизации перед удалением.")
+        if QMessageBox.question(self, "Удалить локальное сохранение?", "Будут удалены локальное хранилище и его резервные состояния. Облачные версии и экспортированные файлы сохранятся. Продолжить?") != QMessageBox.StandardButton.Yes:
+            return
+        self.lock_vault()
+        self.session.store.delete_local_save()
+        self.show_locked()
+
+    def uninstall_application(self):
+        import subprocess
+        uninstaller = Path(sys.executable).with_name("Uninstall.exe")
+        if not getattr(sys, "frozen", False) or not uninstaller.is_file():
+            raise VaultError("Для переносной версии закройте приложение и удалите его папку. Локальное сохранение удаляется отдельной кнопкой.")
+        if self.cloud.busy:
+            raise VaultError("Дождитесь завершения синхронизации перед удалением приложения.")
+        if QMessageBox.question(self, "Удалить приложение?", "Открыть программу удаления? Локальное хранилище сохранится.") != QMessageBox.StandardButton.Yes:
+            return
+        subprocess.Popen([str(uninstaller), "--wait-pid", str(os.getpid())], creationflags=subprocess.CREATE_NO_WINDOW)
+        self._force_quit = True
+        self.close()
 
     def security_settings(self):
         if not self.leave_editor():

@@ -103,6 +103,19 @@ class Store:
         access, document = unlock(read_bounded(paths[index]), secret, recovery=recovery)
         return access, model.validate(document)
 
+    def delete_local_save(self):
+        """Delete local encrypted vault data while holding the interprocess lock."""
+        import re
+        targets = [p for p in self.root.iterdir() if p.name == "CURRENT" or re.fullmatch(r"[0-9a-f-]{36}", p.name) or p.name.startswith(("damaged-", "sync-blocked", "switched-vaults"))]
+        for path in targets:
+            if path.is_symlink() or path.is_junction() or not path.resolve().is_relative_to(self.root.resolve()):
+                raise StorageError()
+        # Remove the active pointer first so partial failure cannot reopen a removed generation.
+        targets.sort(key=lambda p: p.name != "CURRENT")
+        for path in targets:
+            if path.is_dir(): shutil.rmtree(path)
+            else: path.unlink()
+
     def create(self, password):
         if self.exists:
             raise VaultError("Хранилище уже существует.")

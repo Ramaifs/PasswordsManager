@@ -45,6 +45,10 @@ class SyncUI(QObject):
         self.timer.timeout.connect(self.auto_sync)
         self.timer.start(1000)
         self.transport_factory = DriveTransport
+        self.remote_check_pending = False
+        self.check_timer = QTimer(self)
+        self.check_timer.setSingleShot(True)
+        self.check_timer.timeout.connect(self.check_remote_changes)
 
     @property
     def busy(self): return self.worker is not None
@@ -95,7 +99,44 @@ class SyncUI(QObject):
         worker.finished.connect(lambda: delivered(result_box[0] if result_box else VaultError("Обмен прерван.")))
         worker.start()
 
+    def request_remote_check(self):
+        self.remote_check_pending = True
+        self.check_timer.start(500)
+
+    def check_remote_changes(self):
+        from PySide6.QtWidgets import QApplication
+        if not self.window.session.unlocked or not self.connection.exists:
+            self.remote_check_pending = False
+            return
+        if self.busy or self.window.dirty or QApplication.activeModalWidget() is not None:
+            self.check_timer.start(1000)
+            return
+        self.remote_check_pending = False
+        self.cancel = Event()
+        transport = self.transport_factory(self.connection, self.cancel)
+        transport.vault_id = self.window.session.access.header["vault_id"]
+        transport.vault_name = self.window.session.document["settings"].get("vault_name", "Main")
+        def received(remote):
+            from .sync import digest
+            metadata = self.window.session.document.get("sync") or {}
+            seen = metadata.get("seen", {})
+            changed = any(seen.get(version, {}).get("digest") != digest(blob) for version, blob in remote.items())
+            if not changed:
+                return
+            if self.window.dirty:
+                self.request_remote_check()
+                return
+            answer = QMessageBox.question(self.window, "Облачная версия обновлена", "На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены; конфликтующие варианты сохранятся для выбора.")
+            if answer == QMessageBox.StandardButton.Yes:
+                self._received(transport, remote)
+            else:
+                # Do not silently consume the declined version through auto sync.
+                self.remote_check_pending = True
+        self._start(transport.fetch, received)
+
     def auto_sync(self):
+        if self.remote_check_pending:
+            return
         if not self.window.session.unlocked:
             return
         minutes = self.window.session.document["settings"].get("sync_minutes", 5)
@@ -117,7 +158,7 @@ class SyncUI(QObject):
         if not self.connection.exists:
             self.connect()
             return
-        choices = (["Все копии Google Drive", "Синхронизировать", "Отключить Google", "Создать папку заново", "Удалить облачные версии"]
+        choices = (["Все копии Google Drive", "Синхронизировать", "Отключить Google Drive", "Создать папку заново"]
                    if self.connection.exists else ["Подключить Google"])
         choice, ok = QInputDialog.getItem(window, "Google Drive", "Действие", choices, editable=False)
         if not ok: return
@@ -127,7 +168,7 @@ class SyncUI(QObject):
             self.connect()
         elif choice == "Синхронизировать":
             self.sync()
-        elif choice == "Отключить Google":
+        elif choice == "Отключить Google Drive":
             self.pause()
             self.connection.disconnect()
             self.set_status("Google отключён. Локальные и облачные файлы сохранены.")
@@ -136,16 +177,20 @@ class SyncUI(QObject):
                 self.cancel = Event()
                 transport = self.transport_factory(self.connection, self.cancel)
                 self._start(lambda: transport.folders(recreate=True), lambda _: self.sync())
-        elif choice == "Удалить облачные версии":
-            if QMessageBox.question(window, "Удаление из Drive", "Удалить служебные версии и отключить Google на этом компьютере? Ручные копии и локальное хранилище сохранятся.") == QMessageBox.StandardButton.Yes:
-                self.cancel = Event()
-                transport = self.transport_factory(self.connection, self.cancel)
-                transport.vault_id = self.window.session.access.header["vault_id"]
-                transport.vault_name = self.window.session.document["settings"].get("vault_name", "Main")
-                def deleted(_):
-                    self.connection.disconnect()
-                    self.set_status("Служебные версии удалены; Google отключён. Другие подключённые компьютеры могут загрузить свои версии снова.")
-                self._start(transport.delete_cloud, deleted)
+
+    def delete_cloud(self):
+        if self.busy or not self.window.session.unlocked or not self.connection.exists:
+            return
+        window = self.window
+        if QMessageBox.question(window, "Удаление из Drive", "Удалить служебные версии и отключить Google на этом компьютере? Ручные копии и локальное хранилище сохранятся.") == QMessageBox.StandardButton.Yes:
+            self.cancel = Event()
+            transport = self.transport_factory(self.connection, self.cancel)
+            transport.vault_id = self.window.session.access.header["vault_id"]
+            transport.vault_name = self.window.session.document["settings"].get("vault_name", "Main")
+            def deleted(_):
+                self.connection.disconnect()
+                self.set_status("Служебные версии удалены; Google отключён. Другие подключённые компьютеры могут загрузить свои версии снова.")
+            self._start(transport.delete_cloud, deleted)
 
     def connect(self):
         if self.busy or not self.window.session.unlocked:
@@ -264,6 +309,8 @@ class SyncUI(QObject):
         if self.window.dirty:
             self.set_status("Перед синхронизацией сохраните или отмените редактирование.")
             return
+        self.remote_check_pending = False
+        self.check_timer.stop()
         self.reset_schedule()
         self.window.toast("Синхронизация..", persistent=True)
         self.cancel = Event()

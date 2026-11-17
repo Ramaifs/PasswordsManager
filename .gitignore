@@ -8,6 +8,7 @@ __pycache__/
 /releases/
 /artifacts/
 /web/password-manager/artifacts/
+/web/password-manager/dist/*.apk
 /release-materials/
 **/node_modules/
 .env

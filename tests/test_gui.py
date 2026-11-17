@@ -292,12 +292,12 @@ def test_update_dialog_downloads_and_enables_install_without_launch(window, monk
             QTest.qWait(10)
         QApplication.processEvents()
         assert install.isEnabled()
-        assert calls == [{'tag': 'v0.41', 'version': '0.41'}]
+        assert calls == [{'tag': 'v0.42', 'version': '0.42'}]
         versions.setCurrentIndex(1)
         assert not install.isEnabled() and window.updates.downloaded is None
         dialog.reject()
     monkeypatch.setattr(QDialog, 'exec', inspect)
-    window.updates.show_versions([{'tag': 'v0.41', 'version': '0.41'}, {'tag': 'v0.40', 'version': '0.40'}])
+    window.updates.show_versions([{'tag': 'v0.42', 'version': '0.42'}, {'tag': 'v0.40', 'version': '0.40'}])
 
 
 def test_new_entry_uses_selected_category_and_subcategory(window):

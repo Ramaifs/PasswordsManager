@@ -34,3 +34,47 @@
 
 .record.selected{border-color:var(--accent);background:var(--hover)}.remove-field{float:right;font-size:18px;line-height:18px;padding:0 8px;color:var(--danger)}.record-context-menu{position:fixed;z-index:60;min-width:220px;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:8px;box-shadow:var(--shadow)}.record-context-menu small{display:block;color:var(--muted);padding:5px}.record-context-menu button{display:block;width:100%;text-align:left;margin-top:4px;font-size:12px}
 .download-apk{display:inline-block;border:1px solid var(--line);border-radius:7px;padding:5px 9px;color:var(--text);text-decoration:none}.download-apk:hover{background:var(--hover)}
+
+/* Phone navigation keeps the same named sections and full category tree. */
+.mobile-nav-toggle,.mobile-nav-close,.mobile-nav-backdrop{display:none}
+.wizard-actions{flex-wrap:wrap;gap:12px}.wizard-actions>button{min-width:0}.wizard-actions>.primary{margin-left:auto}
+@media(max-width:760px){
+  body{min-width:0;overflow-wrap:anywhere}
+  .workspace,.workspace:not(.show-editor),.workspace.show-editor{grid-template-columns:minmax(0,1fr);height:100dvh;overflow:hidden}
+  .workspace>.sidebar,.workspace.show-editor>.sidebar{display:flex;position:fixed;inset:0 auto 0 0;width:min(320px,88vw);height:100dvh;z-index:81;padding:20px 16px max(18px,env(safe-area-inset-bottom));transform:translateX(-105%);visibility:hidden;overflow-y:auto;border-right:1px solid var(--line);box-shadow:var(--shadow)}
+  .workspace.nav-open>.sidebar{transform:translateX(0);visibility:visible}
+  .workspace .brand{padding:0 42px 24px 10px;font-size:13px}
+  .workspace .brand>div,.workspace .vault-switch>div,.workspace .vault-switch>.icon:last-child,.workspace .nav-link>span,.workspace .section-caption,.workspace .version{display:block}
+  .workspace .vault-switch{justify-content:flex-start;padding:11px 10px;border:1px solid var(--line);background:var(--panel)}
+  .workspace .nav-link{justify-content:flex-start;padding:12px;font-size:14px;min-height:46px}
+  .workspace .nav-link .count{display:block;margin-left:auto}
+  .workspace .category-row{flex-direction:row;min-width:0}
+  .workspace .category-row>.icon-button.small{padding:8px;min-width:36px;min-height:40px}
+  .workspace .category-row>.nav-link span{white-space:nowrap}
+  .workspace .category-toggle{font-size:17px}
+  .workspace .footer-actions{flex-direction:row;gap:8px}
+  .workspace .side-bottom{padding-top:16px}
+  .mobile-nav-toggle,.mobile-nav-close{display:inline-grid;place-items:center;min-width:44px;min-height:44px}
+  .mobile-nav-close{position:absolute;top:14px;right:12px}
+  .workspace.nav-open>.mobile-nav-backdrop{display:block;position:fixed;inset:0;z-index:80;border:0;border-radius:0;background:#0008;cursor:default}
+  .entry-toolbar{padding:14px 16px}
+  .entry-toolbar-top{gap:8px;flex-wrap:wrap}
+  .entry-toolbar-top h2{flex:1;min-width:70px}
+  .entry-toolbar-top button{min-height:44px}
+  .entry-column{overflow:hidden;border-right:0}
+  .records{overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+  .record{min-height:70px;padding:14px 12px}
+  .record strong{font-size:14px}.record small{font-size:12px}
+  .field input,.field select,.field textarea,.search,.editor-content .field input,.editor-content .field textarea,.editor-content .field select{font-size:16px}
+  .editor-top{height:auto;min-height:64px;gap:8px;flex-wrap:wrap;padding:10px 16px}
+  .editor-actions{flex-wrap:wrap}.editor-actions button{min-height:44px}
+  .editor-content{padding:24px 18px max(28px,env(safe-area-inset-bottom));overflow-wrap:anywhere}
+  .field-grid{grid-template-columns:minmax(0,1fr)}
+  dialog{max-height:calc(100dvh - 32px);overflow-y:auto;padding:20px}
+  dialog .modal-actions,.inline-actions,.settings-action{flex-wrap:wrap}
+  .settings-action{gap:12px}.settings-action>div{min-width:0}
+  .toast{right:16px;left:16px;max-width:none;bottom:max(16px,env(safe-area-inset-bottom))}
+  .welcome,.wizard{padding-left:20px;padding-right:20px}
+  .choice{flex-wrap:wrap}.choice-leading{flex:1 1 200px;min-width:0}.choice button{min-height:44px}
+  .bottom-line{position:static;padding:20px;gap:12px}
+}

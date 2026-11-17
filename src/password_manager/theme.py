@@ -21,7 +21,7 @@ def stylesheet(dark=True, accent_color="#8864cb"):
     accent = mix(text, .65) if dark else primary.name()
     selected, hover = mix(bg, .26), mix(bg, .14)
     ink = "#ffffff" if primary.redF() * .299 + primary.greenF() * .587 + primary.blueF() * .114 < .6 else "#17171b"
-    checkmark = (Path(__file__).with_name("assets") / ("checkmark-light.svg" if ink == "#ffffff" else "checkmark-dark.svg")).as_posix()
+    checkmark = (Path(__file__).with_name("assets") / ("checkmark-light.png" if ink == "#ffffff" else "checkmark-dark.png")).as_posix()
     primary_hover = primary.lighter(112).name() if dark else primary.darker(110).name()
     return f"""
         QWidget {{ background: {bg}; color: {text}; font-family: 'Segoe UI'; font-size: 13px; }}

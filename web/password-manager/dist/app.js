@@ -91,7 +91,8 @@ function sidebar() {
 function shell(content, page = 'Хранилища') {
   app.innerHTML = `<div class="layout">${sidebar()}<main class="main"><header class="topbar"><div class="breadcrumb">${icon('vault')}<span>Ваше пространство</span><span>/</span><span>${esc(page)}</span></div><div class="top-status"><span class="status-dot"></span>Локальное шифрование</div></header>${content}<footer class="bottom-line"><span>Ваши пароли. Только ваш доступ.</span><span>Argon2id · AES-256-GCM</span></footer></main></div>`;
   const apk = document.createElement('a');
-  apk.href = 'https://github.com/Ramaifs/PasswordsManager/releases/download/v0.41/PasswordManager-0.41-android.apk';
+  apk.href = './PasswordManager-0.41-android-native.apk';
+  apk.download = 'PasswordManager-0.41-android-native.apk';
   apk.target = '_blank'; apk.rel = 'noopener noreferrer';
   apk.className = 'download-apk'; apk.textContent = 'Android · скачать APK';
   document.querySelector('.bottom-line').append(apk);
@@ -99,14 +100,14 @@ function shell(content, page = 'Хранилища') {
 function home() {
   state.view = 'home'; state.create = null;
   document.title = 'Password Manager — Хранилища';
-  shell(`<section class="welcome"><div class="welcome-mark">${icon('vault')}</div><h1>Пространство для ваших паролей</h1><p class="intro">Всё важное — в одном защищённом месте.<br>Создайте новое хранилище или откройте существующее.</p><div class="choices"><div class="choice"><div class="choice-leading">${icon('plus')}<div><h3>Создать новое хранилище</h3><p>Начните с чистого листа. Выберите имя и место<br class="desktop-break"> для вашего зашифрованного хранилища.</p></div></div><button class="primary" data-action="new">Создать</button></div><div class="choice"><div class="choice-leading">${icon('folder')}<div><h3>Открыть хранилище</h3><p>Уже есть файл? Откройте хранилище .pmvault,<br class="desktop-break"> в том числе из Windows-приложения.</p></div></div><button class="secondary" data-action="import">Открыть</button></div></div>${state.recent.length ? `<div class="mobile-recents"><p class="kicker">На этом устройстве</p>${state.recent.map(v => `<button class="vault-link" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span class="vault-name">${esc(v.name)}</span>${icon('lock')}</button><button class="danger secondary" data-action="delete-vault" data-id="${esc(v.id)}">Удалить хранилище</button>`).join('')}</div>` : ''}<div class="choice"><div><h3>Google Drive</h3><p>Открыть зашифрованную облачную копию</p></div><button class="secondary" data-action="drive-settings">Подключить</button></div>${oldVaults.length ? `<div class="notice"><strong>Прежние хранилища браузера</strong><p>Скачайте копии перед удалением. Новые данные сюда не записываются.</p>${oldVaults.map((v,n) => `<div class="backup-row"><span>${esc(v.name)}</span><button data-action="legacy-export" data-index="${n}">Скачать</button><button class="danger" data-action="legacy-delete" data-index="${n}">Удалить</button></div>`).join('')}</div>` : ''}<p class="welcome-foot">${icon('lock')}Мастер-пароль не передаётся на сервер</p></section>`);
+  shell(`<section class="welcome"><div class="welcome-mark">${icon('vault')}</div><h1>Пространство для ваших паролей</h1><p class="intro">Всё важное — в одном защищённом месте.<br>Создайте новое хранилище или откройте существующее.</p><div class="choices"><div class="choice"><div class="choice-leading">${icon('plus')}<div><h3>Создать новое хранилище</h3><p>Начните с чистого листа. Выберите имя и место<br class="desktop-break"> для вашего зашифрованного хранилища.</p></div></div><button class="primary" data-action="new">Создать</button></div><div class="choice"><div class="choice-leading">${icon('folder')}<div><h3>Открыть хранилище</h3><p>Уже есть файл? Откройте хранилище .pmvault,<br class="desktop-break"> в том числе из Windows-приложения.</p></div></div><button class="secondary" data-action="import">Открыть</button></div></div>${state.recent.length ? `<div class="mobile-recents"><p class="kicker">На этом устройстве</p>${state.recent.map(v => `<button class="vault-link" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span class="vault-name">${esc(v.name)}</span>${icon('lock')}</button><button class="danger secondary" data-action="delete-vault" data-id="${esc(v.id)}">Удалить хранилище</button>`).join('')}</div>` : ''}<div class="choice"><div class="choice-leading">${icon('cloud')}<div><h3>Открыть из Google Drive</h3><p>Подключите Google и выберите существующее хранилище. Создавать новое не требуется.</p></div></div><button class="secondary" data-action="drive-start">${connected() ? 'Открыть Google Drive' : 'Подключить Google Drive'}</button></div>${oldVaults.length ? `<div class="notice"><strong>Прежние хранилища браузера</strong><p>Скачайте копии перед удалением. Новые данные сюда не записываются.</p>${oldVaults.map((v,n) => `<div class="backup-row"><span>${esc(v.name)}</span><button data-action="legacy-export" data-index="${n}">Скачать</button><button class="danger" data-action="legacy-delete" data-index="${n}">Удалить</button></div>`).join('')}</div>` : ''}<p class="welcome-foot">${icon('lock')}Мастер-пароль не передаётся на сервер</p></section>`);
 }
 function steps(current) { return `<div class="steps"><${current === 1 ? 'b' : 'span'}>01 Хранилище</${current === 1 ? 'b' : 'span'}><i class="step-line"></i><${current === 2 ? 'b' : 'span'}>02 Защита</${current === 2 ? 'b' : 'span'}><i class="step-line"></i><${current === 3 ? 'b' : 'span'}>03 Восстановление</${current === 3 ? 'b' : 'span'}></div>`; }
 function wizardHeader(step, title, intro) { return `<section class="wizard"><button class="back" data-action="wizard-back">${icon('back')}Назад</button>${steps(step)}<h1>${title}</h1><p class="intro">${intro}</p>`; }
 function newVault() {
   if (!state.create) state.create = { name: '', location: 'memory', directory: null, step: 1 };
   state.view = 'create'; state.create.step = 1;
-  shell(`${wizardHeader(1, 'Создать новое хранилище', 'Сначала создайте хранилище. Сохранить файл или подключить Google Drive можно после создания.')}<form id="create-location" class="form"><div class="field"><label for="vault-name">Название хранилища</label><input id="vault-name" name="name" placeholder="Например, Main" value="${esc(state.create.name)}" maxlength="100" autocomplete="off" required><small>До сохранения в файл или Google Drive хранилище существует в памяти вкладки.</small></div><p id="form-error" class="form-error"></p><div class="wizard-actions"><button type="button" class="secondary" data-action="import">Открыть существующее</button><button class="primary" type="submit">Продолжить${icon('arrow')}</button></div></form></section>`, 'Новое хранилище');
+  shell(`${wizardHeader(1, 'Создать новое хранилище', 'Создайте новое хранилище, откройте существующий файл или подключите Google Drive и выберите облачную копию.')}<form id="create-location" class="form"><div class="field"><label for="vault-name">Название хранилища</label><input id="vault-name" name="name" placeholder="Например, Main" value="${esc(state.create.name)}" maxlength="100" autocomplete="off" required><small>До сохранения в файл или Google Drive хранилище существует в памяти вкладки.</small></div><p id="form-error" class="form-error"></p><div class="wizard-actions"><button type="button" class="secondary" data-action="import">Открыть существующее</button><button type="button" class="secondary" data-action="drive-start">Подключить Google Drive</button><button class="primary" type="submit">Продолжить${icon('arrow')}</button></div></form></section>`, 'Новое хранилище');
   document.querySelector('#vault-name').focus();
 }
 function protection() {
@@ -176,7 +177,7 @@ function otherPasswordsLink() {
 }
 function workspaceSidebar() {
   const doc = state.doc, active = Object.values(doc.entries).filter(e => !e.deleted_at).length, trash = Object.values(doc.entries).filter(e => e.deleted_at).length;
-  return `<aside class="sidebar">${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}"></i><span>${depth ? '• ' : ''}${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.41</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
+  return `<aside class="sidebar" id="workspace-navigation" aria-label="Навигация хранилища"><button class="mobile-nav-close icon-button" data-action="mobile-nav-close" aria-label="Закрыть меню">${icon('close')}</button>${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'Файл на ПК'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}"></i><span>${depth ? '• ' : ''}${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">WEB · 0.41</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
 }
 function recordList() {
   const entries = visibleEntries();
@@ -202,14 +203,41 @@ function applyAppearance() {
   const rgb = accent.slice(1).match(/../g).map(value => parseInt(value, 16));
   style.setProperty('--accent-ink', rgb[0]*.299 + rgb[1]*.587 + rgb[2]*.114 < 153 ? '#fff' : '#17171b');
 }
+let mobileNavOrigin;
+function setMobileNav(open) {
+  const workspace = document.querySelector('.workspace');
+  if (!workspace) return;
+  const sidebar = workspace.querySelector('.sidebar');
+  workspace.classList.toggle('nav-open', open);
+  workspace.querySelector('.mobile-nav-toggle')?.setAttribute('aria-expanded', String(open));
+  if (open) { mobileNavOrigin = document.activeElement; sidebar.querySelector('button')?.focus(); }
+  else mobileNavOrigin?.focus();
+  const phone = matchMedia('(max-width: 760px)').matches;
+  sidebar.inert = phone && !open;
+  workspace.querySelector('.entry-column').inert = phone && open;
+  workspace.querySelector('.record-editor').inert = phone && open;
+}
+document.addEventListener('keydown', event => {
+  const sidebar = document.querySelector('.workspace.nav-open .sidebar');
+  if (!sidebar) return;
+  if (event.key === 'Escape') { event.preventDefault(); setMobileNav(false); }
+  if (event.key === 'Tab') {
+    const buttons = [...sidebar.querySelectorAll('button:not(:disabled),a[href]')].filter(node => node.getClientRects().length);
+    const first = buttons[0], last = buttons.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+  }
+});
+matchMedia('(max-width: 760px)').addEventListener('change', () => setMobileNav(false));
 function workspace() {
   applyAppearance();
   state.view = 'workspace'; document.title = state.record.name + ' — Password Manager';
-  app.innerHTML = `<div class="workspace ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<section class="entry-column"><div class="entry-toolbar"><div class="entry-toolbar-top"><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div><label class="entry-sort-label" for="entry-sort">Сортировка<select id="entry-sort"><option value="title" ${state.entrySort === 'title' ? 'selected' : ''}>По алфавиту (А–Я)</option><option value="updated" ${state.entrySort === 'updated' ? 'selected' : ''}>По изменению (сначала новые)</option><option value="category" ${state.entrySort === 'category' ? 'selected' : ''}>По категориям</option></select></label></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
+  app.innerHTML = `<div class="workspace ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<button class="mobile-nav-backdrop" data-action="mobile-nav-close" aria-label="Закрыть меню" tabindex="-1"></button><section class="entry-column"><div class="entry-toolbar"><div class="entry-toolbar-top"><button class="mobile-nav-toggle icon-button" data-action="mobile-nav" aria-label="Открыть меню" aria-controls="workspace-navigation" aria-expanded="false">☰</button><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div><label class="entry-sort-label" for="entry-sort">Сортировка<select id="entry-sort"><option value="title" ${state.entrySort === 'title' ? 'selected' : ''}>По алфавиту (А–Я)</option><option value="updated" ${state.entrySort === 'updated' ? 'selected' : ''}>По изменению (сначала новые)</option><option value="category" ${state.entrySort === 'category' ? 'selected' : ''}>По категориям</option></select></label></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
   document.querySelectorAll('[data-category-color]').forEach(node => { node.style.backgroundColor = node.dataset.categoryColor; });
-  document.querySelectorAll('[data-category-depth]').forEach(node => { if (innerWidth > 760) node.style.paddingLeft = Math.min(Number(node.dataset.categoryDepth), 12) * 14 + 'px'; });
+  document.querySelectorAll('[data-category-depth]').forEach(node => { node.style.paddingLeft = Math.min(Number(node.dataset.categoryDepth), 12) * 14 + 'px'; });
   applyEntryColors();
   renderEditor();
+  setMobileNav(false);
 }
 
 function refreshSelectionList() {
@@ -493,8 +521,8 @@ async function connectDrive(node) {
     if (result === null) return;
     driveCache.clear();
     driveIdentity = await (await driveTransport()).identity();
-    if (state.doc) { closeModal(); await syncDrive(); driveDialog(); }
-    else driveDialog();
+  if (state.doc) { closeModal(); await syncDrive(); driveDialog(); }
+    else await listCloud();
   } finally { oauthPending = false; }
 }
 async function listCloud() {
@@ -541,6 +569,9 @@ async function deleteCloudVault(copy) {
 }
 
 const actions = {
+  'drive-start': async () => { if (connected()) await listCloud(); else { driveDialog(); } },
+  'mobile-nav': () => setMobileNav(true),
+  'mobile-nav-close': () => setMobileNav(false),
   'drive-settings': async () => { closeModal(); driveDialog(); },
   'delete-vault': async node => deleteVault(node.dataset.id),
   'drive-delete': async node => deleteCloudVault(cloudCopies[Number(node.dataset.index)]),
@@ -741,6 +772,7 @@ document.addEventListener('click', e => {
   if (node.dataset.action === 'lock' && state.busy) { pauseDrive(); state.lockRequested = true; if (modal.open) closeModal(); return; }
   if (node.dataset.action === 'close-modal' && modal.querySelector('[data-choice]')) return;
   if (node.dataset.action === 'select-entry') { e.preventDefault(); safe(() => selectRecords(node, e.ctrlKey || e.metaKey, e.shiftKey)); return; }
+  if (node.closest('.workspace .sidebar') && !['mobile-nav', 'mobile-nav-close'].includes(node.dataset.action)) setMobileNav(false);
   const action = actions[node.dataset.action]; if (action) { e.preventDefault(); safe(() => action(node)); }
 });
 document.addEventListener('change', e => {
@@ -809,5 +841,5 @@ setInterval(checkAutoSync, 1000);
 // Returning to the tab checks elapsed inactivity; hiding it never locks immediately.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !oauthPending) checkIdle(); });
 document.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'l' && (e.ctrlKey || e.metaKey) && e.shiftKey && state.token) { e.preventDefault(); safe(lock); } });
-try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); const loginResult = new URL(location.href).searchParams.get('google'); if (loginResult) history.replaceState(null, '', '/'); await initializeGoogleSession(GOOGLE_WEB_CLIENT_ID); await refreshRecent(); if (!state.recent.length && !oldVaults.length && !connected()) newVault(); else home(); if (loginResult === 'connected' && connected()) driveDialog(); else if (loginResult) toast('Вход Google не завершён. Повторите подключение; при ошибке адреса возврата проверьте настройки Web OAuth-клиента.'); }
+try { if (!crypto.subtle) throw new Error('Для шифрования нужен HTTPS или localhost.'); const loginResult = new URL(location.href).searchParams.get('google'); if (loginResult) history.replaceState(null, '', '/'); await initializeGoogleSession(GOOGLE_WEB_CLIENT_ID); await refreshRecent(); home(); if (loginResult === 'connected' && connected()) await listCloud(); else if (loginResult) toast('Вход Google не завершён. Повторите подключение; при ошибке адреса возврата проверьте настройки Web OAuth-клиента.'); }
 catch (e) { shell(`<section class="welcome"><h1>Не удалось открыть пространство</h1><p class="intro">${esc(e.message)}</p><button class="secondary" data-action="help">Как это работает</button></section>`); }

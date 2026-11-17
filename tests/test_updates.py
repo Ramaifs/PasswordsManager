@@ -18,7 +18,7 @@ def test_stable_versions_and_exact_github_origin():
 def test_no_releases_network_errors_and_invalid_tags():
     def missing(*args, **kwargs): raise HttpError(404)
     assert latest_release(fetch=missing) == {'available':False, 'unpublished':True}
-    def failed(*args, **kwargs): raise HttpError(403)
+    def failed(*args, **kwargs): raise HttpError(500)
     with pytest.raises(VaultError): latest_release(fetch=failed)
     for tag in ['v1.0.0-beta', '../bad', 'v1', None, 'v1.2.3/../../bad']:
         with pytest.raises(VaultError): version_tuple(tag)

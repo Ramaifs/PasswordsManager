@@ -40,9 +40,9 @@ async function unseal(stored, env, id) {
   const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv), additionalData: encoder.encode(id) }, await key(env), unb64(box.data));
   return JSON.parse(decoder.decode(raw));
 }
-async function newSession(tokens, env) {
+async function newSession(tokens, env, kind = 'web') {
   const id = b64(crypto.getRandomValues(new Uint8Array(32)));
-  const sealed = await seal({ refresh: tokens.refresh_token, expires: Date.now() + LIFETIME * 1000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID }, env, id);
+  const sealed = await seal({ refresh: tokens.refresh_token, expires: Date.now() + LIFETIME * 1000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID, kind }, env, id);
   await env.GOOGLE_SESSIONS.put(id, sealed, { expirationTtl: LIFETIME });
   return id;
 }
@@ -66,11 +66,24 @@ async function redirectCallback(request, env, url) {
   try {
     const tokens = await googleToken({ code, grant_type: 'authorization_code', redirect_uri: env.SITE_ORIGIN + '/', code_verifier: flow.verifier }, env);
     if (!tokens?.refresh_token) return returnToSite(env, 'offline_access_missing');
-    return returnToSite(env, 'connected', await newSession(tokens, env));
+    const id = await newSession(tokens, env, flow.android ? 'android' : 'web');
+    if (flow.android) {
+      // The public state is only a lookup key. Redemption needs the app's
+      // 256-bit verifier; credentials never appear in the browser URL or HTML.
+      const pairKey = 'android-pair:' + flow.android.state;
+      await env.GOOGLE_SESSIONS.put(pairKey, await seal({
+        session: id, challenge: flow.android.challenge, expires: Date.now() + 300000
+      }, env, pairKey), { expirationTtl: 300 });
+      return new Response('<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Google подключён</title><body><h1>Google подключён</h1><p>Вернитесь в Password Manager для Android.</p><a href="passwordmanager://google">Вернуться в приложение</a></body></html>', {
+        headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+          'Set-Cookie': flowCookie('', 0), 'Content-Security-Policy': "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" }
+      });
+    }
+    return returnToSite(env, 'connected', id);
   } catch (error) { return returnToSite(env, error instanceof SessionError ? error.code : 'google_exchange_unavailable'); }
 }
-async function readSession(request, env) {
-  const id = sessionId(request);
+async function readSession(request, env, native = false) {
+  const id = native ? request.headers.get('Authorization')?.replace(/^Bearer /, '') : sessionId(request);
   if (!id || !/^[A-Za-z0-9_-]{43}$/.test(id)) return null;
   const stored = await env.GOOGLE_SESSIONS.get(id);
   if (!stored) return null;
@@ -78,7 +91,7 @@ async function readSession(request, env) {
     const box = JSON.parse(stored);
     const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(box.iv), additionalData: encoder.encode(id) }, await key(env), unb64(box.data));
     const value = JSON.parse(decoder.decode(raw));
-    if (value.expires <= Date.now() || value.origin !== env.SITE_ORIGIN || value.client !== env.GOOGLE_CLIENT_ID) return null;
+    if (value.expires <= Date.now() || value.origin !== env.SITE_ORIGIN || value.client !== env.GOOGLE_CLIENT_ID || (native ? value.kind !== 'android' : value.kind === 'android')) return null;
     return { id, ...value };
   } catch { return null; }
 }
@@ -123,24 +136,68 @@ async function codeBody(request) {
   return decoder.decode(bytes);
 }
 
+async function startFlow(env, android) {
+  const state = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const verifier = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(verifier))));
+  const flow = await seal({ state, verifier, expires: Date.now() + 600000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID, ...(android ? { android } : {}) }, env, 'oauth-flow');
+  const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  auth.search = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: env.SITE_ORIGIN + '/', response_type: 'code', scope: SCOPE, state, code_challenge: challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'consent' });
+  return { url: auth.href, cookie: flowCookie(b64(encoder.encode(flow))) };
+}
+async function handleAndroid(request, env, url) {
+  // Native clients cannot supply browser Origin. No CORS headers are emitted;
+  // browser callers cannot read native bearer credentials across origins.
+  if (request.headers.has('Origin') || request.headers.get('Sec-Fetch-Site') === 'cross-site') return reply({ error: 'Invalid native request' }, 403);
+  if (url.pathname === '/api/android/connect' && request.method === 'GET') {
+    const state = url.searchParams.get('state'), challenge = url.searchParams.get('challenge');
+    if (!/^[A-Za-z0-9_-]{43}$/.test(state || '') || !/^[A-Za-z0-9_-]{43}$/.test(challenge || '')) return reply({ error: 'Invalid pairing request' }, 400);
+    const flow = await startFlow(env, { state, challenge });
+    return new Response(null, { status: 303, headers: { Location: flow.url, 'Set-Cookie': flow.cookie, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' } });
+  }
+  if (request.method !== 'POST') return reply({ error: 'Method not allowed' }, 405);
+  if (url.pathname === '/api/android/pair') {
+    if (!request.headers.get('Content-Type')?.startsWith('application/json')) return reply({ error: 'Invalid request format' }, 400);
+    const source = await codeBody(request);
+    let body; try { body = JSON.parse(source); } catch { return reply({ error: 'Invalid pairing request' }, 400); }
+    if (!body || !/^[A-Za-z0-9_-]{43}$/.test(body.state || '') || !/^[A-Za-z0-9_-]{43}$/.test(body.verifier || '')) return reply({ error: 'Invalid pairing request' }, 400);
+    const pairKey = 'android-pair:' + body.state, stored = await env.GOOGLE_SESSIONS.get(pairKey);
+    if (!stored) return reply({ pending: true });
+    const pair = await unseal(stored, env, pairKey);
+    const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(body.verifier))));
+    if (pair.expires <= Date.now() || pair.challenge !== challenge) return reply({ error: 'Pairing expired or invalid' }, 403);
+    // Idempotent for five minutes, allowing recovery if a response is lost.
+    // Each retry requires the same secret verifier, which never leaves the app.
+    return reply({ session: pair.session });
+  }
+  if (!['/api/android/token', '/api/android/logout'].includes(url.pathname)) return reply({ error: 'Not found' }, 404);
+  const session = await readSession(request, env, true);
+  if (!session) return reply({ error: 'Google session expired' }, 401);
+  if (url.pathname === '/api/android/logout') {
+    await env.GOOGLE_SESSIONS.delete(session.id); return reply({ success: true });
+  }
+  const tokens = await googleToken({ grant_type: 'refresh_token', refresh_token: session.refresh }, env);
+  if (!tokens) return reply({ error: 'Reconnect Google to continue' }, 401);
+  return reply({ access_token: tokens.access_token, expires_in: tokens.expires_in });
+}
+
 export async function handleSession(request, env) {
   const url = new URL(request.url), path = url.pathname;
   if (path === '/api/google/config' && request.method === 'GET') return reply({ enabled: configured(env), clientId: configured(env) ? env.GOOGLE_CLIENT_ID : null });
   if (!configured(env)) return reply({ error: 'Google session service is not configured' }, 503);
   if (!validSessionKey(env)) return reply({ error: 'session_key_invalid' }, 503);
+  if (url.origin === env.SITE_ORIGIN && path.startsWith('/api/android/')) {
+    try { return await handleAndroid(request, env, url); }
+    catch (error) { return reply({ error: error instanceof SessionError ? error.code : 'android_session_unavailable' }, error instanceof SessionError ? error.status : 502); }
+  }
   if (url.origin === env.SITE_ORIGIN && path === '/' && request.method === 'GET' && (url.searchParams.has('code') || url.searchParams.has('error'))) return redirectCallback(request, env, url);
   if (url.origin !== env.SITE_ORIGIN || request.headers.get('Origin') !== env.SITE_ORIGIN || request.headers.get('X-Requested-With') !== 'XMLHttpRequest') return reply({ error: 'Invalid request origin' }, 403);
   if (request.method !== 'POST') return reply({ error: 'Method not allowed' }, 405);
   let stage = 'session_storage_unavailable';
   try {
     if (path === '/api/google/start') {
-      const state = b64(crypto.getRandomValues(new Uint8Array(32)));
-      const verifier = b64(crypto.getRandomValues(new Uint8Array(32)));
-      const challenge = b64(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(verifier))));
-      const flow = await seal({ state, verifier, expires: Date.now() + 600000, origin: env.SITE_ORIGIN, client: env.GOOGLE_CLIENT_ID }, env, 'oauth-flow');
-      const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-      auth.search = new URLSearchParams({ client_id: env.GOOGLE_CLIENT_ID, redirect_uri: env.SITE_ORIGIN + '/', response_type: 'code', scope: SCOPE, state, code_challenge: challenge, code_challenge_method: 'S256', access_type: 'offline', prompt: 'consent' });
-      return reply({ authorization_url: auth.href }, 200, flowCookie(b64(encoder.encode(flow))));
+      const flow = await startFlow(env);
+      return reply({ authorization_url: flow.url }, 200, flow.cookie);
     }
     if (path === '/api/google/exchange') {
       if (!request.headers.get('Content-Type')?.startsWith('application/json')) return reply({ error: 'Invalid request format' }, 400);
@@ -186,7 +243,7 @@ export async function handleSession(request, env) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname.startsWith('/api/google/') || (url.pathname === '/' && (url.searchParams.has('code') || url.searchParams.has('error')))) return handleSession(request, env);
+    if (url.pathname.startsWith('/api/google/') || url.pathname.startsWith('/api/android/') || (url.pathname === '/' && (url.searchParams.has('code') || url.searchParams.has('error')))) return handleSession(request, env);
     return env.ASSETS.fetch(request);
   }
 };

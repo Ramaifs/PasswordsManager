@@ -27,7 +27,10 @@ MAX_INSTALLER = 512 * 1024 * 1024
 def release_versions(*, cancel=None, fetch=request):
     try:
         releases = parse(fetch("GET", RELEASES_API, headers={"Accept": "application/vnd.github+json", "User-Agent": "PasswordsManager/" + __version__}, limit=4 * 1024 * 1024, cancel=cancel))
-    except HttpError:
+    except HttpError as error:
+        if error.status in (403, 429):
+            version = _latest_manifest(cancel=cancel)["version"]
+            return [{"version": version, "tag": "v" + version}]
         raise VaultError("Не удалось получить список версий с GitHub.") from None
     if not isinstance(releases, list):
         raise VaultError("GitHub вернул некорректный список версий.")
@@ -135,12 +138,36 @@ def version_tuple(value):
     return parts + (0,) if len(parts) == 2 else parts
 
 
+def _latest_manifest(*, cancel=None):
+    """The public latest asset bypasses the shared unauthenticated API quota."""
+    try:
+        data = b"".join(github_asset(
+            f"https://github.com/{REPOSITORY}/releases/latest/download/manifest.json",
+            cancel=cancel or Event(), limit=256 * 1024))
+        manifest = parse(data)
+        version_tuple(manifest["version"])
+        installer = manifest["files"]["PasswordsManager.exe"]
+        if (not isinstance(installer["bytes"], int) or isinstance(installer["bytes"], bool)
+                or not 0 < installer["bytes"] <= MAX_INSTALLER
+                or not isinstance(installer["sha256"], str)
+                or not re.fullmatch(r"[0-9a-fA-F]{64}", installer["sha256"])):
+            raise ValueError()
+        return manifest
+    except (KeyError, TypeError, ValueError, OSError):
+        raise VaultError("Не удалось получить сведения об обновлении с GitHub. Повторите позже.") from None
+
+
 def latest_release(*, current=__version__, cancel=None, fetch=request):
     try:
         data = fetch("GET", API, headers={"Accept": "application/vnd.github+json", "User-Agent": "PasswordsManager/" + current}, limit=256 * 1024, cancel=cancel)
     except HttpError as error:
         if error.status == 404:
             return {"available": False, "unpublished": True}
+        if error.status in (403, 429):
+            version = _latest_manifest(cancel=cancel)["version"]
+            return {"available": version_tuple(version) > version_tuple(current),
+                    "version": version,
+                    "url": f"https://github.com/{REPOSITORY}/releases/tag/v{version}"}
         raise VaultError("Не удалось проверить обновления. Проверьте подключение к интернету.") from None
     release = parse(data)
     if not isinstance(release, dict) or release.get('draft') or release.get('prerelease'):
