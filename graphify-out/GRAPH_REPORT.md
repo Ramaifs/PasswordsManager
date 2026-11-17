@@ -1,12 +1,12 @@
 # Graph Report - Password Manager  (2026-11-17)
 
 ## Corpus Check
-- 161 files · ~101,221 words
+- 162 files · ~101,554 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 12 file(s) not represented in the graph (top: (none) 4, .xml 2, .css 2)
 
 ## Summary
-- 1704 nodes · 4372 edges · 115 communities (73 shown, 42 thin omitted)
+- 1709 nodes · 4383 edges · 118 communities (79 shown, 39 thin omitted)
 - Extraction: 89% EXTRACTED · 11% INFERRED · 0% AMBIGUOUS · INFERRED: 472 edges (avg confidence: 0.88)
 - Token cost: 0 input · 0 output
 
@@ -15,7 +15,7 @@
 - test_sync.py
 - SyncUI
 - MainActivity
-- VaultError
+- http_client.py
 - test_gui.py
 - Store
 - .refresh_entries
@@ -29,10 +29,10 @@
 - crypto.py
 - .build_editor
 - README.md
-- hashlib
+- pathlib
 - SyncError
 - hash-wasm.js
-- .save
+- .add_extra_field
 - test_search.py
 - История изменений
 - browser_qa.py
@@ -53,7 +53,7 @@
 - Требования к менеджеру паролей
 - ref_node_test
 - Менеджер паролей 0.41 — инструкция
-- Архитектура проекта Password Manager
+- parse
 - Разработка настольного менеджера паролей
 - Проверка 0.38
 - 0007-drive-versions.md
@@ -90,18 +90,24 @@
 - createXXHash3
 - createXXHash64
 - Mutex
-- WindowsEvents
+- test_google.py
+- protected.py
 - createKeccak
 - decodeBase64
 - scrypt
 - cloudflare-worker/README.md
 - records
 - Preferences
-- os
+- storage.py
+- package-permissions.test.mjs
+- re
+- sync.py
+- IOThread
+- test_settings_order_separators_and_google_status
 
 ## God Nodes (most connected - your core abstractions)
-1. `Window` - 94 edges
-2. `VaultError` - 94 edges
+1. `VaultError` - 94 edges
+2. `Window` - 94 edges
 3. `InvalidVault` - 46 edges
 4. `Store` - 41 edges
 5. `canonical()` - 38 edges
@@ -112,21 +118,21 @@
 10. `SyncError` - 27 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `Windows: интерфейс и управление состоянием` --references--> `Store`  [INFERRED]
-  ARCHITECTURE.md → src/password_manager/storage.py
 - `Синхронизация: общая логика двух клиентов` --references--> `IOThread`  [INFERRED]
   ARCHITECTURE.md → src/password_manager/sync_ui.py
-- `test_seen_remote_versions_do_not_prompt()` --calls--> `digest()`  [INFERRED]
-  tests/test_release_042.py → src/password_manager/sync.py
-- `fail()` --calls--> `StorageError`  [INFERRED]
-  tests/test_gui.py → src/password_manager/errors.py
+- `Windows: интерфейс и управление состоянием` --references--> `Store`  [INFERRED]
+  ARCHITECTURE.md → src/password_manager/storage.py
+- `fetch()` --calls--> `canonical()`  [INFERRED]
+  tests/test_updates.py → src/password_manager/crypto.py
 - `Содержимое и сохранение` --references--> `additional_fields()`  [INFERRED]
   docs/vault-format.md → src/password_manager/model.py
+- `test_bulk_color_category_preserves_password_type_and_syncs()` --uses--> `InvalidVault`  [INFERRED]
+  tests/test_bulk_entries.py → src/password_manager/errors.py
 
 ## Import Cycles
 - None detected.
 
-## Communities (115 total, 42 thin omitted)
+## Communities (118 total, 39 thin omitted)
 
 ### Community 1 - "core.js"
 Cohesion: 0.07
@@ -137,40 +143,40 @@ Cohesion: 0.16
 Nodes (22): SyncEngine, align(), MemoryDrive, test_category_and_subcategory_colors_roundtrip_drive(), test_cleanup_does_not_remove_unresolved_contributors(), test_concurrent_cleanup_views_keep_eight_covering_states(), test_concurrent_color_changes_resolve_without_resurrection(), test_conflict_requires_explicit_choice() (+14 more)
 
 ### Community 3 - "SyncUI"
-Cohesion: 0.07
-Nodes (18): backup_time(), display_time(), group_copies(), ordered_copies(), CloudCopiesDialog, CloudPreviewDialog, _dpapi(), ProtectedConnection (+10 more)
+Cohesion: 0.09
+Nodes (15): backup_time(), display_time(), group_copies(), ordered_copies(), CloudCopiesDialog, CloudPreviewDialog, SyncUI, connected() (+7 more)
 
 ### Community 4 - "MainActivity"
 Cohesion: 0.06
 Nodes (4): Bridge, MainActivity, WebChromeClient, WebViewClient
 
-### Community 5 - "VaultError"
-Cohesion: 0.10
-Nodes (25): parse(), VaultError, HttpError, json_request(), request(), preview_legacy(), config(), download_release() (+17 more)
+### Community 5 - "http_client.py"
+Cohesion: 0.14
+Nodes (10): HttpError, json_request(), request(), test_expired_google_grant_requires_reconnect_without_deleting_connection(), test_update_check_and_version_picker_survive_github_api_rate_limit(), limited(), test_update_fallback_rejects_invalid_installer_metadata(), test_no_releases_network_errors_and_invalid_tags() (+2 more)
 
 ### Community 6 - "test_gui.py"
-Cohesion: 0.05
-Nodes (22): test_category_arrow_click_drag_drop_and_root_move(), seed(), test_close_choice_dialog_and_full_exit_saved(), test_close_to_tray_remembers_choice_locks_and_restores(), test_customization_saves_theme_and_accent(), test_default_color_is_only_inside_color_picker(), choose(), test_empty_trash_is_one_commit_ignores_search_and_preserves_active() (+14 more)
+Cohesion: 0.06
+Nodes (24): remove(), operation(), app(), test_autocomplete_uses_vault_values_and_clears_when_locked(), test_bulk_clipboard_and_additional_draft_reopen(), test_clipboard_timer_preserves_new_content(), test_close_choice_dialog_and_full_exit_saved(), test_close_dialog_enter_defaults_to_tray() (+16 more)
 
 ### Community 7 - "Store"
-Cohesion: 0.08
-Nodes (33): StorageError, new_document(), validate(), read_bounded(), Store, test_archive_write_failure_never_changes_current(), test_failed_switch_preserves_current_and_archived_ciphertext(), fail() (+25 more)
+Cohesion: 0.06
+Nodes (49): Google OAuth и Cloudflare, Windows: интерфейс и управление состоянием, Архитектура проекта Password Manager, Где что находится, Общая схема, Просмотр резервных копий и последнее открытое хранилище, С чего начинать изменение, Сборка, поставка и проверки (+41 more)
 
 ### Community 8 - ".refresh_entries"
-Cohesion: 0.15
-Nodes (9): save_settings(), category(), category_path(), category_rows(), test_all_entries_category_color_caption_and_named_export(), test_category_move_menu_excludes_descendants_and_keeps_subtree(), test_category_sort_groups_paths_and_keeps_unsaved_editor(), test_ctrl_shift_selection_bulk_actions_and_delete_only_selected() (+1 more)
+Cohesion: 0.12
+Nodes (14): save_settings(), category(), category_descendants(), category_path(), category_rows(), move_category(), search(), test_all_entries_category_color_caption_and_named_export() (+6 more)
 
 ### Community 9 - "Window"
 Cohesion: 0.10
-Nodes (8): configure_app(), main(), Window, application_icon(), entry_icon(), navigation_icon(), Session, test_window_mode_survives_minimize_tray_and_restart()
+Nodes (9): main(), Window, validate_password(), new_document(), run(), test_create_with_eight_character_master(), test_open_export_in_empty_profile(), test_window_mode_survives_minimize_tray_and_restart() (+1 more)
 
 ### Community 10 - "Setup"
 Cohesion: 0.11
 Nodes (3): LocalPython, Setup, Version
 
 ### Community 11 - "sync_ui.py"
-Cohesion: 0.10
-Nodes (29): save_key(), canonical(), checked_envelope(), unb64(), InvalidVault, normalize_category_parents(), write_fsynced(), AccessConflict (+21 more)
+Cohesion: 0.15
+Nodes (15): normalize_category_parents(), conflicts(), empty(), identifier(), is_conflicted(), merge(), migrate_category_colors(), _observed() (+7 more)
 
 ### Community 12 - "session.mjs"
 Cohesion: 0.21
@@ -178,43 +184,39 @@ Nodes (25): b64(), codeBody(), configured(), cookie(), decoder, encoder, fetch()
 
 ### Community 13 - "app.py"
 Cohesion: 0.10
-Nodes (12): run(), validate_password(), generate(), GeneratorOptions, test_bad_generator(), test_exclusive_lock(), test_generator(), test_import_fixture() (+4 more)
+Nodes (8): configure_app(), WindowsEvents, application_icon(), entry_icon(), navigation_icon(), stylesheet(), test_long_category_has_no_horizontal_scrollbar_or_corner(), test_checked_indicator_has_contrasting_tick_and_accent_background()
 
 ### Community 14 - "pytest"
-Cohesion: 0.14
-Nodes (11): Blob, export_blob(), test_bulk_passwords_keep_spaces_and_stay_out_of_uncategorized(), test_hierarchy_validation_and_parent_rename(), test_move_category_keeps_subtree_entries_and_rejects_cycles_without_mutation(), test_nested_filter_deletion_and_legacy_migration(), test_parent_register_sync_and_concurrent_cycle_is_deterministic(), test_password_only_rejects_extra_identity_fields_and_empty_password() (+3 more)
+Cohesion: 0.17
+Nodes (12): test_bulk_color_category_preserves_password_type_and_syncs(), test_additional_fields_encryption_search_sync_and_validation(), test_bulk_passwords_keep_spaces_and_stay_out_of_uncategorized(), test_release_list_and_verified_download_cancel_corruption(), test_hierarchy_validation_and_parent_rename(), test_move_category_keeps_subtree_entries_and_rejects_cycles_without_mutation(), test_nested_filter_deletion_and_legacy_migration(), test_parent_register_sync_and_concurrent_cycle_is_deterministic() (+4 more)
 
 ### Community 15 - "app.js"
 Cohesion: 0.08
 Nodes (30): additionalFields(), EXTRA_FIELDS, FIELD_LABELS, migrateOldPasswords(), nextPasswordNumber(), splitPasswords(), actions, app (+22 more)
 
 ### Community 16 - "crypto.py"
-Cohesion: 0.16
-Nodes (17): Access, b64(), derive(), _pairs(), recovery_bytes(), recovery_secret(), seal(), unlock() (+9 more)
+Cohesion: 0.15
+Nodes (19): Access, b64(), canonical(), checked_envelope(), derive(), _pairs(), recovery_bytes(), seal() (+11 more)
 
 ### Community 18 - ".build_editor"
-Cohesion: 0.15
-Nodes (6): button(), field(), run(), action(), test_close_dialog_enter_defaults_to_tray(), test_deletion_category_opens_actions_and_keeps_updates_below()
+Cohesion: 0.11
+Nodes (8): button(), field(), run(), action(), test_customization_saves_theme_and_accent(), test_general_settings_changes_remembered_close_action(), test_generator_does_not_write_vault_or_request_sync(), test_deletion_category_opens_actions_and_keeps_updates_below()
 
 ### Community 19 - "README.md"
 Cohesion: 0.12
 Nodes (10): Основной интерфейс — настольное приложение на PyQt, PySide6 и All Rights Reserved для собственного кода, Argon2id и AES-256-GCM через cryptography, Версия 0.42, Проверка 0.42, Матрица приёмки, Первые программные проверки — 2026-10-25, версия 0.1.0, Менеджер паролей (+2 more)
 
-### Community 20 - "hashlib"
-Cohesion: 0.16
+### Community 20 - "pathlib"
+Cohesion: 0.10
 Nodes (3): command(), check_asset(), test_inputs()
 
 ### Community 21 - "SyncError"
-Cohesion: 0.16
-Nodes (12): DriveTransport, file_id(), FolderMissing, SyncError, test_drive_lists_all_vaults_and_checks_ciphertext_before_open(), Connection, FakeAPI, test_cancel_prevents_api_calls() (+4 more)
+Cohesion: 0.32
+Nodes (5): DriveTransport, file_id(), FolderMissing, SyncError, test_drive_lists_all_vaults_and_checks_ciphertext_before_open()
 
 ### Community 22 - "hash-wasm.js"
 Cohesion: 0.05
 Nodes (43): base64Lookup, bcryptVerify(), crc32(), createCRC32(), createXXHash32(), digit, encodeBase64(), encodeResult() (+35 more)
-
-### Community 23 - ".save"
-Cohesion: 0.08
-Nodes (15): remove(), operation(), run(), stylesheet(), test_checked_indicator_has_contrasting_tick_and_accent_background(), test_autocomplete_uses_vault_values_and_clears_when_locked(), test_bulk_clipboard_and_additional_draft_reopen(), test_clipboard_timer_preserves_new_content() (+7 more)
 
 ### Community 24 - "test_search.py"
 Cohesion: 0.47
@@ -222,23 +224,15 @@ Nodes (3): test_search_finds_number_in_note_without_phone_field(), test_search_f
 
 ### Community 25 - "История изменений"
 Cohesion: 0.09
-Nodes (22): 2026-10-25 — Web 0.1, 2026-10-25 — Web 0.2.1, 2026-10-25 — Web 0.2.2, 2026-10-25 — Web 0.2 / Windows 0.3.0, 2026-10-25 — Windows 0.1.0, 2026-10-25 — Windows 0.2.0, 2026-10-25 — Windows 0.2.1, 2026-10-25 — Windows 0.3.1 (+14 more)
+Nodes (23): 2026-10-25 — Web 0.1, 2026-10-25 — Web 0.2.1, 2026-10-25 — Web 0.2.2, 2026-10-25 — Web 0.2 / Windows 0.3.0, 2026-10-25 — Windows 0.1.0, 2026-10-25 — Windows 0.2.0, 2026-10-25 — Windows 0.2.1, 2026-10-25 — Windows 0.3.1 (+15 more)
 
 ### Community 26 - "browser_qa.py"
 Cohesion: 0.17
 Nodes (10): click(), fill(), js(), Page, process(), Results, screenshot(), submit() (+2 more)
 
-### Community 30 - "bulk-entries.test.mjs"
-Cohesion: 0.13
-Nodes (4): port, root, types, sourceRoot
-
 ### Community 31 - "google.js"
 Cohesion: 0.12
 Nodes (26): checkAutoSync(), checkRemoteChanges(), connectDrive(), driveDialog(), driveTransport(), settings(), stopDrive(), syncDrive() (+18 more)
-
-### Community 32 - "CategoryList"
-Cohesion: 0.14
-Nodes (3): CategoryDelegate, CategoryList, test_long_category_has_no_horizontal_scrollbar_or_corner()
 
 ### Community 34 - "esc"
 Cohesion: 0.16
@@ -284,9 +278,9 @@ Nodes (11): 10. Документы и оставшаяся инженерная 
 Cohesion: 0.18
 Nodes (11): Google Drive, Возможности 0.41, Записи, генератор и корзина, Запуск и данные, Импорт, экспорт и резервные состояния, Интерфейс, Категории и трей в версии 0.39, Копии Google Drive (+3 more)
 
-### Community 46 - "Архитектура проекта Password Manager"
-Cohesion: 0.09
-Nodes (18): Google OAuth и Cloudflare, Windows: интерфейс и управление состоянием, Архитектура проекта Password Manager, Где что находится, Общая схема, Просмотр резервных копий и последнее открытое хранилище, С чего начинать изменение, Сборка, поставка и проверки (+10 more)
+### Community 46 - "parse"
+Cohesion: 0.13
+Nodes (15): parse(), preview_legacy(), download_release(), _latest_manifest(), latest_release(), release_versions(), UpdateChecker, finished() (+7 more)
 
 ### Community 48 - "Разработка настольного менеджера паролей"
 Cohesion: 0.22
@@ -303,6 +297,14 @@ Nodes (4): Локальная рабочая копия и прямое подк
 ### Community 51 - "Проверка 0.39"
 Cohesion: 0.25
 Nodes (6): Версия 0.39, Итоговые результаты, Облачные копии, Последнее открытие, Проверка 0.39, Просмотр и переключение
+
+### Community 52 - "verify_034.py"
+Cohesion: 0.11
+Nodes (3): Checks, Transport, test_remote_check_prompts_before_applying_and_decline_blocks_auto_sync()
+
+### Community 53 - "build_android.py"
+Cohesion: 0.29
+Nodes (3): certificate(), _dpapi(), run()
 
 ### Community 54 - "Реализация 0.2.0 и обновление 0.2.1"
 Cohesion: 0.33
@@ -357,12 +359,12 @@ Cohesion: 0.50
 Nodes (4): Документация, Менеджер паролей, Разработка, Установка
 
 ### Community 71 - "oauth.py"
-Cohesion: 0.13
-Nodes (11): authorize(), get_request(), bearer(), exchange_code(), validate_token(), verifier_pair(), backup_name(), validate_name() (+3 more)
+Cohesion: 0.17
+Nodes (9): recovery_secret(), authorize(), get_request(), bearer(), config(), exchange_code(), validate_token(), verifier_pair() (+1 more)
 
 ### Community 75 - "model.py"
-Cohesion: 0.09
-Nodes (27): Конверт и ключи, Локальный формат PMVAULT v1, Содержимое и сохранение, operation(), show(), additional_fields(), backup_diff(), bulk_edit() (+19 more)
+Cohesion: 0.08
+Nodes (24): Конверт и ключи, Локальный формат PMVAULT v1, Содержимое и сохранение, operation(), show(), additional_fields(), backup_diff(), bulk_edit() (+16 more)
 
 ### Community 76 - "listCloud"
 Cohesion: 0.42
@@ -400,6 +402,14 @@ Nodes (4): createXXHash3(), validateSeed$1(), writeSeed$1(), xxhash3()
 Cohesion: 0.67
 Nodes (4): createXXHash64(), validateSeed$2(), writeSeed$2(), xxhash64()
 
+### Community 89 - "test_google.py"
+Cohesion: 0.19
+Nodes (8): Connection, FakeAPI, test_cancel_prevents_api_calls(), test_deleted_folder_never_silently_recreated(), test_drive_upload_readback_retry_and_safe_delete(), test_incomplete_listing_stops_processing(), fake(), test_oauth_config_rejects_foreign_endpoint()
+
+### Community 90 - "protected.py"
+Cohesion: 0.24
+Nodes (4): Blob, _dpapi(), ProtectedConnection, test_actual_windows_dpapi_protection_and_disconnect()
+
 ### Community 91 - "createKeccak"
 Cohesion: 0.67
 Nodes (3): createKeccak(), keccak(), validateBits()
@@ -417,28 +427,48 @@ Cohesion: 0.15
 Nodes (10): Password Manager Android 0.42, Загрузка и проверка, Подготовка, Размещение на Cloudflare, Версия 0.36, Поставка и проверки, Версия 0.37, Веб-версия (+2 more)
 
 ### Community 110 - "Preferences"
-Cohesion: 0.30
-Nodes (7): Preferences, test_last_opened_preference_survives_other_preferences(), test_close_preference_survives_restart_and_can_return_to_ask(), test_damaged_or_oversized_preferences_default_to_question(), test_entry_sort_survives_other_preference_changes(), test_legacy_preferences_and_invalid_window_mode(), test_window_state_and_close_action_survive_each_others_updates()
+Cohesion: 0.20
+Nodes (12): save_key(), VaultError, Preferences, github_asset(), redirect_request(), test_last_opened_preference_survives_other_preferences(), stream(), test_close_preference_survives_restart_and_can_return_to_ask() (+4 more)
+
+### Community 112 - "package-permissions.test.mjs"
+Cohesion: 0.20
+Nodes (4): root, port, root, types
+
+### Community 113 - "re"
+Cohesion: 0.33
+Nodes (6): valid_fields(), validate(), validate_metadata(), backup_name(), validate_name(), test_named_backup_and_old_document_compatibility()
+
+### Community 115 - "sync.py"
+Cohesion: 0.28
+Nodes (5): AccessConflict, digest(), header_id(), state_id(), test_seen_remote_versions_do_not_prompt()
+
+### Community 116 - "IOThread"
+Cohesion: 0.25
+Nodes (3): Синхронизация: общая логика двух клиентов, IOThread, DownloadThread
+
+### Community 117 - "test_settings_order_separators_and_google_status"
+Cohesion: 0.25
+Nodes (5): seed(), test_empty_trash_is_one_commit_ignores_search_and_preserves_active(), test_settings_order_separators_and_google_status(), test_update_dialog_downloads_and_enables_install_without_launch(), inspect()
 
 ## Knowledge Gaps
 - **5 isolated node(s):** `Version`, `records`, `../dist/storage.js?fresh-session`, `../dist/cloud-backups.js?reload`, `personal-password-manager`
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 547 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **42 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 550 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **39 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Архитектура проекта Password Manager` connect `Архитектура проекта Password Manager` to `README.md`?**
-  _High betweenness centrality (0.123) - this node is a cross-community bridge._
-- **Are the 5 inferred relationships involving `Window` (e.g. with `test_create_with_eight_character_master()` and `test_open_export_in_empty_profile()`) actually correct?**
-  _`Window` has 5 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Архитектура проекта Password Manager` connect `Store` to `README.md`, `IOThread`?**
+  _High betweenness centrality (0.096) - this node is a cross-community bridge._
+- **Are the 20 inferred relationships involving `VaultError` (e.g. with `Access` and `validate()`) actually correct?**
+  _`VaultError` has 20 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Version`, `records`, `../dist/storage.js?fresh-session` to the rest of the system?**
   _5 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `core.js` be split into smaller, more focused modules?**
   _Cohesion score 0.07201225740551584 - nodes in this community are weakly interconnected._
-- **Why does `Store` connect `Store` to `Window`, `app.py`, `pytest`, `Архитектура проекта Password Manager`, `.save`?**
-  _High betweenness centrality (0.084) - this node is a cross-community bridge._
-- **Are the 20 inferred relationships involving `VaultError` (e.g. with `Access` and `validate()`) actually correct?**
-  _`VaultError` has 20 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `Store` connect `Store` to `test_gui.py`, `Window`, `model.py`, `app.py`, `storage.py`?**
+  _High betweenness centrality (0.072) - this node is a cross-community bridge._
+- **Are the 5 inferred relationships involving `Window` (e.g. with `test_create_with_eight_character_master()` and `test_open_export_in_empty_profile()`) actually correct?**
+  _`Window` has 5 INFERRED edges - model-reasoned connections that need verification._
 - **Should `SyncUI` be split into smaller, more focused modules?**
-  _Cohesion score 0.07288135593220339 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.08862745098039215 - nodes in this community are weakly interconnected._

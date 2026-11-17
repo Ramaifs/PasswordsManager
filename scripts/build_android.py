@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -85,10 +86,18 @@ if not keystore.exists():
 else:
     environment['PM_ANDROID_SIGNING_PASSWORD'] = _dpapi(password_file.read_bytes(), decrypt=True).decode('ascii')
 apk = out / f'PasswordManager-{version}-android.apk'
+previous_signature = run(java, '-jar', tools / 'lib/apksigner.jar', 'verify', '--print-certs', apk) if apk.exists() else ''
 run(java, '-jar', tools / 'lib/apksigner.jar', 'sign', '--ks', keystore, '--ks-key-alias', 'release', '--ks-pass', 'env:PM_ANDROID_SIGNING_PASSWORD', '--key-pass', 'env:PM_ANDROID_SIGNING_PASSWORD', '--out', apk, work / 'aligned.apk')
 verification = run(java, '-jar', tools / 'lib/apksigner.jar', 'verify', '--verbose', '--print-certs', apk)
 run(tools / 'zipalign.exe', '-c', '4', apk)
 badging = run(tools / 'aapt.exe', 'dump', 'badging', apk)
+permissions = run(tools / 'aapt.exe', 'dump', 'permissions', apk)
+if "name='android.permission.INTERNET'" not in permissions:
+    raise RuntimeError('Offline Android APK is missing INTERNET permission: native OAuth and Drive requests would fail after browser consent.')
+def certificate(value):
+    match = re.search(r'certificate SHA-256 digest: ([0-9a-f]+)', value)
+    return match.group(1) if match else None
+update_compatible = bool(previous_signature and certificate(previous_signature) == certificate(verification))
 with zipfile.ZipFile(apk) as archive:
     assert archive.testzip() is None
     assert {'AndroidManifest.xml', 'classes.dex', 'resources.arsc'} <= set(archive.namelist())
@@ -98,7 +107,9 @@ report = {
     'sha256': hashlib.sha256(apk.read_bytes()).hexdigest(),
     'signature_verification': verification, 'badging': badging,
     'input_hashes': {p.relative_to(ROOT).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((ROOT / 'android').rglob('*')) if p.is_file()},
-    'device_tested': False, 'published': False, 'signature_changed': args.replacement_key, 'requires_old_apk_uninstall': args.replacement_key,
+    'device_tested': False, 'published': False, 'signature_changed': args.replacement_key and not update_compatible, 'requires_old_apk_uninstall': args.replacement_key and not update_compatible,
+    'internet_permission_verified': True, 'permissions': permissions, 'update_compatible_with_previous_apk': update_compatible,
+    'version_code': ET.parse(manifest).getroot().get(namespace + 'versionCode'),
 }
 (ROOT / 'artifacts' / ('android-' + version + '-manifest.json')).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
 print(json.dumps({k: report[k] for k in ('version', 'apk', 'bytes', 'sha256', 'device_tested')}, indent=2))
