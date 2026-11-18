@@ -87,10 +87,20 @@ export async function authorize(){
  const challenge=url64(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
  AndroidVault.connect(state,challenge);
  const deadline=Date.now()+180000;
+ let consecutiveNetworkErrors = 0;
  while(Date.now()<deadline&&epoch===generation){
   await wait(1500);
   if (epoch !== generation) break;
-  const result=await call('pair',{state,verifier});
+  let result;
+  try {
+   result = await call('pair', {state, verifier});
+   consecutiveNetworkErrors = 0;
+  } catch (error) {
+   if (epoch !== generation) break;
+   if (error.code !== 'transport_retry' || ++consecutiveNetworkErrors >= 3 || Date.now() >= deadline) throw error;
+   await wait(1000 * consecutiveNetworkErrors);
+   continue;
+  }
   if(epoch!==generation)throw new Error('Вход отменён.');
   if (result.paired) {
    token = null;

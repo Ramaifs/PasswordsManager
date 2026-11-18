@@ -44,3 +44,19 @@ test('a revoked saved Google session allows sign-in again without retrying the r
  await assert.rejects(client.ensureAccessToken(),/Подключите Google Drive/);
  assert.equal(calls,1);
 });
+
+test('a temporary network interruption during pairing retries without reopening Google', async () => {
+ let browserOpens = 0;
+ let pairRequests = 0;
+ AndroidVault.connect = () => { browserOpens++; };
+ AndroidVault.authRequest = (id, path) => {
+  const result = path === 'token' ? {value:{access_token:'RECOVERED',expires_in:3600}}
+   : ++pairRequests === 1 ? {error:'Connection reset',code:'transport_retry'}
+   : {value:{paired:true}};
+  queueMicrotask(() => window.pmAuthResult(id,result));
+ };
+ const client = await import('../assets/ui/google.js?pair-interrupted');
+ assert.equal(await client.authorize(),'RECOVERED');
+ assert.equal(browserOpens,1);
+ assert.equal(pairRequests,2);
+});

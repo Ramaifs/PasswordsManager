@@ -171,8 +171,29 @@ public final class MainActivity extends Activity {
       result.put("error", error.getMessage()).put("code", error.code);
      } catch (Exception error) {
       String step = path.toUpperCase(java.util.Locale.ROOT);
-      String kind = error instanceof JSONException ? "RESPONSE" : "NETWORK";
-      result.put("error", "Не удалось завершить подключение Google Drive [" + step + "-" + kind + "].");
+      String kind;
+      String description;
+      if (error instanceof UnknownHostException) {
+       kind = "DNS";
+       description = "Не удалось найти сервер подключения Google Drive";
+      } else if (error instanceof javax.net.ssl.SSLException) {
+       kind = "TLS";
+       description = "Не удалось установить защищённое соединение с сервером Google Drive";
+      } else if (error instanceof SocketTimeoutException) {
+       kind = "TIMEOUT";
+       description = "Сервер подключения Google Drive не ответил вовремя";
+      } else if (error instanceof SocketException || error instanceof EOFException) {
+       kind = "SOCKET";
+       description = "Соединение с сервером подключения Google Drive оборвалось";
+      } else if (error instanceof JSONException) {
+       kind = "RESPONSE";
+       description = "Сервис подключения Google Drive прислал некорректный ответ";
+      } else {
+       kind = "NETWORK";
+       description = "Не удалось подключиться к серверу Google Drive";
+      }
+      result.put("error", description + " [" + step + "-" + kind + "].");
+      if (kind.equals("TIMEOUT") || kind.equals("SOCKET")) result.put("code", "transport_retry");
      }
     } catch (JSONException ignored) {
      return;

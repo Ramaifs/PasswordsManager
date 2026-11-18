@@ -1,7 +1,7 @@
 # Graph Report - Password Manager  (2026-11-18)
 
 ## Corpus Check
-- 164 files · ~102,436 words
+- 164 files · ~102,676 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 12 file(s) not represented in the graph (top: (none) 4, .xml 2, .css 2)
 
@@ -144,8 +144,8 @@
   docs/vault-format.md → src/password_manager/model.py
 - `test_close_to_tray_remembers_choice_locks_and_restores()` --calls--> `Preferences`  [INFERRED]
   tests/test_gui.py → src/password_manager/preferences.py
-- `limited()` --calls--> `HttpError`  [INFERRED]
-  tests/test_network_recovery.py → src/password_manager/http_client.py
+- `fail()` --calls--> `StorageError`  [INFERRED]
+  tests/test_gui.py → src/password_manager/errors.py
 
 ## Import Cycles
 - None detected.
@@ -242,7 +242,7 @@ Nodes (10): click(), fill(), js(), Page, process(), Results, screenshot(), submi
 
 ### Community 31 - "google.js"
 Cohesion: 0.14
-Nodes (21): driveDialog(), stopDrive(), ../assets/ui/google.js?revoked, accept(), accessToken(), authorize(), authorizeRedirect, call() (+13 more)
+Nodes (21): driveDialog(), stopDrive(), ../assets/ui/google.js?pair-interrupted, accept(), accessToken(), authorize(), authorizeRedirect, call() (+13 more)
 
 ### Community 34 - "esc"
 Cohesion: 0.18
@@ -489,7 +489,7 @@ Nodes (3): existingDatabase(), legacyVaults(), removeLegacy()
 _Questions this graph is uniquely positioned to answer:_
 
 - **Why does `Архитектура проекта Password Manager` connect `Архитектура проекта Password Manager` to `IOThread`, `README.md`?**
-  _High betweenness centrality (0.094) - this node is a cross-community bridge._
+  _High betweenness centrality (0.109) - this node is a cross-community bridge._
 - **Are the 20 inferred relationships involving `VaultError` (e.g. with `Access` and `validate()`) actually correct?**
   _`VaultError` has 20 INFERRED edges - model-reasoned connections that need verification._
 - **What connects `Version`, `records`, `../dist/storage.js?fresh-session` to the rest of the system?**
@@ -497,7 +497,7 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `core.js` be split into smaller, more focused modules?**
   _Cohesion score 0.07091136079900125 - nodes in this community are weakly interconnected._
 - **Why does `Store` connect `Store` to `read_bounded`, `window`, `test_gui.py`, `crypto.py`, `app.py`, `test_open_export_in_empty_profile`, `canonical`, `.build_editor`, `test_core.py`, `storage.py`, `Архитектура проекта Password Manager`?**
-  _High betweenness centrality (0.072) - this node is a cross-community bridge._
+  _High betweenness centrality (0.073) - this node is a cross-community bridge._
 - **Are the 5 inferred relationships involving `Window` (e.g. with `test_create_with_eight_character_master()` and `test_open_export_in_empty_profile()`) actually correct?**
   _`Window` has 5 INFERRED edges - model-reasoned connections that need verification._
 - **Should `SyncUI` be split into smaller, more focused modules?**
