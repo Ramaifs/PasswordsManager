@@ -146,7 +146,7 @@ class Window(QMainWindow):
             self.toast_timer = QTimer(self)
             self.toast_timer.setSingleShot(True)
             self.toast_timer.timeout.connect(self.toast_label.hide)
-        color = "#48bf7b" if text.startswith("Синхронизация выполнена!") else "#ff9900"
+        color = "#48bf7b" if text.startswith(("Синхронизация выполнена!", "Установлена последняя версия")) else "#ff9900"
         self.toast_label.setStyleSheet(f"QLabel {{ background: #292637; color: {color}; border: 1px solid #9b87f5; border-radius: 8px; padding: 14px 20px; }}")
         self.toast_timer.stop()
         self.toast_label.setText(text)
@@ -160,6 +160,17 @@ class Window(QMainWindow):
     def position_toast(self):
         if hasattr(self, "toast_label"):
             self.toast_label.move(max(8, self.width() - self.toast_label.width() - 24), self.height() - self.toast_label.height() - 24)
+        if hasattr(self, "startup_badge"):
+            self.startup_badge.move(max(8, self.width() - self.startup_badge.width() - 24), 16)
+
+    def refresh_startup_badge(self):
+        pending = self.session.unlocked and (
+            self.updates.busy or self.cloud.busy or self.cloud.check_timer.isActive()
+            or self.cloud.reviewing_remote_changes
+        )
+        self.startup_badge.setVisible(pending)
+        if not pending:
+            self.startup_badge_timer.stop()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -234,6 +245,9 @@ class Window(QMainWindow):
         self.setCentralWidget(page)
 
     def show_locked(self):
+        if hasattr(self, "startup_badge"):
+            self.startup_badge_timer.stop()
+            self.startup_badge.hide()
         page = QWidget()
         layout = QVBoxLayout(page)
         brand = QLabel("Личное хранилище")
@@ -378,7 +392,6 @@ class Window(QMainWindow):
         self.master.clear()
         self.last_activity = time.monotonic()
         self.build_editor()
-        self.cloud.request_remote_check()
         if created:
             self.toast("Хранилище создано. Для облачной копии подключите Google Drive в настройках.")
 
@@ -413,9 +426,7 @@ class Window(QMainWindow):
                 return
             access, doc = self.session.store.recover_damaged(password, index)
         else:
-            diff = model.backup_diff(current, doc)
-            text = f"Добавится: {diff['added']}; исчезнет: {diff['removed']}; изменится: {diff['changed']}.\nСохранить текущее состояние и восстановить копию?"
-            if QMessageBox.question(self, "Различия", text) != QMessageBox.StandardButton.Yes:
+            if not self.confirm_copy_restore(current, doc):
                 return
             doc = self.session.store.restore_backup(access, current, index)
         self.session.access, self.session.document = access, doc
@@ -563,12 +574,7 @@ class Window(QMainWindow):
                 widget.setFixedHeight(90)
             widget.textChanged.connect(self.mark_dirty)
             self.fields[key] = widget
-            if key in model.SUGGESTION_FIELDS:
-                completer = QCompleter([], widget)
-                completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-                completer.setFilterMode(Qt.MatchFlag.MatchContains)
-                widget.setCompleter(completer)
-                completer.activated[str].connect(widget.setText)
+            self.configure_entry_input(key, widget)
             field(label, widget, *positions[key])
             if key in ("password", "second_password"):
                 controls = QHBoxLayout()
@@ -588,6 +594,9 @@ class Window(QMainWindow):
         self.advanced.toggled.connect(lambda _: self.set_editing(self.editing))
         options.addWidget(self.advanced)
         editor.addLayout(options)
+        self.allow_spaces = QCheckBox("Разрешить пробелы в этой записи")
+        self.allow_spaces.toggled.connect(self.mark_dirty)
+        editor.addWidget(self.allow_spaces)
         self.paste_button = button("Вставить пароли с буфера обмена", lambda: self.safe(self.paste_other_passwords), editor)
         actions = QHBoxLayout()
         self.save_button = button("Сохранить", lambda: self.safe(self.save), actions)
@@ -636,6 +645,23 @@ class Window(QMainWindow):
             self.set_editing(True)
             self.dirty = True
         self.updates.schedule()
+        if self.cloud.connection.exists:
+            self.cloud.request_remote_check()
+        if not hasattr(self, "startup_badge"):
+            self.startup_badge = QLabel("Синхронизация..", self)
+            self.startup_badge.setStyleSheet("background: #292637; color: #fff; border-radius: 8px; padding: 10px 16px;")
+            self.startup_badge.adjustSize()
+            self.startup_badge_timer = QTimer(self)
+            self.startup_badge_timer.setInterval(100)
+            self.startup_badge_timer.timeout.connect(self.refresh_startup_badge)
+        self.position_toast()
+        self.startup_badge.raise_()
+        self.startup_badge_timer.start()
+        self.refresh_startup_badge()
+        if (not self.dirty and self.session.document["settings"].get("entry_input", {}).get("check", True)
+                and model.space_problems(self.session.document)):
+            access = self.session.access
+            QTimer.singleShot(0, lambda: self.safe(lambda: self.check_entry_spaces(manual=False)) if self.session.access is access and not self.dirty else None)
 
     def category_context_menu(self, position):
         if not self.leave_editor():
@@ -697,7 +723,8 @@ class Window(QMainWindow):
         self.save_button.setVisible(editing)
         self.generate_button.setVisible(editing)
         self.edit_button.setVisible(bool(self.selected_id) and not editing and not self.session.document["entries"][self.selected_id]["deleted_at"])
-        self.advanced.setVisible(not self.password_only)
+        self.advanced.setVisible(editing or not self.password_only)
+        self.allow_spaces.setVisible(editing and self.advanced.isChecked())
         self.paste_button.setVisible(self.password_only)
         for key, control in self.extra_buttons.items():
             control.setVisible(editing and self.advanced.isChecked() and not self.password_only)
@@ -713,6 +740,61 @@ class Window(QMainWindow):
             self.fields[key].setEchoMode(mode)
             for _, widget in self.extra_widgets[key]:
                 widget.setEchoMode(mode)
+
+    def configure_entry_input(self, key, widget):
+        if key in model.CREDENTIAL_FIELDS:
+            previous = [widget.text()]
+            def guard(current):
+                old = previous[0]
+                if not self.loading and not self.allow_spaces.isChecked() and sum(map(str.isspace, current)) > sum(map(str.isspace, old)):
+                    cursor = widget.cursorPosition()
+                    widget.setText(old)
+                    widget.setCursorPosition(min(max(0, cursor - 1), len(old)))
+                    self.toast(model.SPACE_MESSAGE)
+            widget.textEdited.connect(guard)
+            widget.textChanged.connect(lambda _value: previous.__setitem__(0, widget.text()))
+        if key not in model.SUGGESTION_FIELDS:
+            return
+        completer = QCompleter(model.suggestions(self.session.document, key), widget)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        widget.setCompleter(completer)
+        def activate(value):
+            if not self.allow_spaces.isChecked() and any(map(str.isspace, value)):
+                self.toast(model.SPACE_MESSAGE)
+            else:
+                widget.setText(value)
+        completer.activated[str].connect(activate)
+        popup = completer.popup()
+        popup.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        popup.customContextMenuRequested.connect(lambda pos: self.safe(lambda: self.suggestion_menu(key, widget, pos)))
+
+    def refresh_suggestions(self, field):
+        for widget in [self.fields[field], *(item[1] for item in self.extra_widgets[field])]:
+            widget.completer().model().setStringList(model.suggestions(self.session.document, field))
+
+    def suggestion_menu(self, key, widget, position):
+        popup = widget.completer().popup()
+        index = popup.indexAt(position)
+        if not index.isValid():
+            return
+        value = index.data()
+        source = model.suggestion_sources(self.session.document, key).get(value)
+        if source is None:
+            return
+        menu = QMenu(self)
+        origin = menu.addAction("Источник подсказки")
+        hide = menu.addAction("Удалить подсказку")
+        selected = menu.exec(popup.viewport().mapToGlobal(position))
+        if selected is origin:
+            info = QMessageBox(self)
+            info.setTextFormat(Qt.TextFormat.PlainText)
+            info.setWindowTitle("Источник подсказки")
+            info.setText(source["title"])
+            info.exec()
+        elif selected is hide:
+            self.session.mutate(lambda doc: model.hide_suggestion(doc, key, value))
+            self.refresh_suggestions(key)
 
     def add_extra_field(self, key, value=""):
         items = self.extra_widgets[key]
@@ -735,6 +817,7 @@ class Window(QMainWindow):
         if key in model.SECRET_FIELDS:
             widget.setEchoMode(QLineEdit.EchoMode.Normal if self.reveal.isChecked() else QLineEdit.EchoMode.Password)
         widget.textChanged.connect(self.mark_dirty)
+        self.configure_entry_input(key, widget)
         layout.addWidget(widget)
         if key in model.SECRET_FIELDS:
             button("Копировать", lambda: self.copy_secret_value(widget.text()), layout)
@@ -769,7 +852,10 @@ class Window(QMainWindow):
     def paste_other_passwords(self):
         if not self.leave_editor():
             return
-        ids = self.session.mutate(lambda doc: model.paste_passwords(doc, QApplication.clipboard().text()))
+        text = QApplication.clipboard().text()
+        if any(char.isspace() and char not in "\r\n" for char in text):
+            raise VaultError(model.SPACE_MESSAGE)
+        ids = self.session.mutate(lambda doc: model.paste_passwords(doc, text))
         self.clear_editor()
         self.refresh_entries()
         self.status.setText(f"Добавлено паролей: {len(ids)}")
@@ -1032,6 +1118,8 @@ class Window(QMainWindow):
             values["additional_fields"] = additional
         if self.entry_color:
             values["color"] = self.entry_color
+        if self.allow_spaces.isChecked():
+            values["allow_spaces"] = True
         if self.password_only:
             values.update(entry_type="password", title=model.password_title(values["note"]))
         return values
@@ -1057,7 +1145,8 @@ class Window(QMainWindow):
         for key, items in additional.items():
             for value in items:
                 self.add_extra_field(key, value)
-        self.advanced.setChecked(bool(values.get("second_password") or any(additional.values())))
+        self.allow_spaces.setChecked(bool(values.get("allow_spaces")))
+        self.advanced.setChecked(bool(values.get("allow_spaces") or values.get("second_password") or any(additional.values())))
         self.reveal_passwords(False)
         self.record_category.setCurrentIndex(max(0, self.record_category.findData(values.get("category"))))
         self.editor_heading.setText(values.get("title") or ("Прочий пароль" if self.password_only else "Новая запись"))
@@ -1114,6 +1203,11 @@ class Window(QMainWindow):
             raise VaultError("Сначала восстановите запись из корзины.")
         values = self.values()
         eid = self.selected_id
+        old = self.session.document["entries"].get(eid, {})
+        if any(values.get(field, "") != old.get(field, "") or
+               values.get("additional_fields", {}).get(field, []) != old.get("additional_fields", {}).get(field, [])
+               for field in model.space_fields(values)) or (old.get("allow_spaces") and model.space_fields(values)):
+            raise VaultError(model.SPACE_MESSAGE)
         def operation(doc):
             result = model.save_entry(doc, values, eid)
             doc["drafts"].clear()
@@ -1366,13 +1460,71 @@ class Window(QMainWindow):
         if not ok:
             return
         prior = model.validate(self.session.access.decode(read_bounded(self.session.store.snapshots()[index])))
-        diff = model.backup_diff(self.session.document, prior)
-        text = f"Добавится записей: {diff['added']}; исчезнет: {diff['removed']}; изменится: {diff['changed']}.\nКатегории изменятся: {'да' if diff['categories_changed'] else 'нет'}.\nТекущее состояние будет сохранено как резервное. Восстановить?"
-        if QMessageBox.question(self, "Различия", text) == QMessageBox.StandardButton.Yes:
+        if self.confirm_copy_restore(self.session.document, prior):
             self.session.document = self.session.store.restore_backup(self.session.access, self.session.document, index)
             self.refresh_categories()
             self.clear_editor()
             self.refresh_entries()
+
+    def confirm_copy_restore(self, before, after):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Различия между версиями")
+        layout = QVBoxLayout(dialog)
+        summary = QTextEdit()
+        summary.setReadOnly(True)
+        summary.setPlainText(model.describe_changes(before, after))
+        layout.addWidget(summary)
+        hint = QLabel("Текущее состояние будет сохранено как резервное.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        controls = QHBoxLayout()
+        button("Отмена", dialog.reject, controls).setDefault(True)
+        button("Восстановить копию", dialog.accept, controls)
+        layout.addLayout(controls)
+        dialog.resize(620, 380)
+        return dialog.exec() == QDialog.DialogCode.Accepted
+
+    def check_entry_spaces(self, manual=True):
+        issues = model.space_problems(self.session.document)
+        if not issues:
+            if manual:
+                self.toast("Записи проверены. Проблем с пробелами нет.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Проверка правильности записей")
+        layout = QVBoxLayout(dialog)
+        hint = QLabel("Пробелы найдены в перечисленных полях. Автоисправление изменит сохранённые значения, включая пароли. Можно выбрать запись и исправить её вручную.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        rows = QListWidget()
+        for key, title, fields in issues:
+            item = QListWidgetItem(title + " — " + ", ".join(model.FIELD_NAMES[field] for field in fields))
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            rows.addItem(item)
+        rows.setCurrentRow(0)
+        layout.addWidget(rows)
+        choice = [None]
+        def finish(value):
+            choice[0] = value
+            dialog.accept()
+        button("Открыть выбранную запись", lambda: finish(rows.currentItem().data(Qt.ItemDataRole.UserRole)), layout)
+        button("Исправить автоматически", lambda: finish("repair"), layout)
+        button("Позже", dialog.reject, layout)
+        dialog.resize(620, 400)
+        dialog.exec()
+        if choice[0] == "repair":
+            if not self.leave_editor():
+                return
+            self.session.mutate(model.repair_spaces)
+            self.clear_editor()
+            self.refresh_entries()
+            self.toast("Некоторые записи требуют ручной правки." if model.space_problems(self.session.document) else "Пробелы исправлены")
+        elif choice[0] and self.leave_editor():
+            entry = self.session.document["entries"][choice[0]]
+            self.selected_id = choice[0]
+            self.fill_editor(entry)
+            if not entry["deleted_at"]:
+                self.set_editing(True)
 
     def warn_exports(self):
         return QMessageBox.question(self, "Изменение доступа", "Защита восьми управляемых копий будет обновлена. Экспорты, скачанные файлы и сохранённые исходники в damaged/sync-blocked не меняются и могут требовать прежних секретов. Продолжить?") == QMessageBox.StandardButton.Yes
@@ -1588,6 +1740,10 @@ class Window(QMainWindow):
         check_updates.setChecked(values.get("check_updates", True))
         layout.addWidget(check_updates)
         action("Проверить обновления", lambda: self.updates.check(manual=True))
+        check_entries = QCheckBox("Правильность написания записей при запуске")
+        check_entries.setChecked(values.get("entry_input", {}).get("check", True))
+        layout.addWidget(check_entries)
+        action("Проверить правильность записей", self.check_entry_spaces)
         separator()
         layout.addStretch()
         def save_settings():
@@ -1595,7 +1751,14 @@ class Window(QMainWindow):
                 return
             from .vault_names import validate_name
             vault_name = validate_name(name.text())
-            self.session.mutate(lambda doc: doc["settings"].update(vault_name=vault_name, theme=theme.currentData(), accent_color=accent.text(), lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0, check_updates=check_updates.isChecked()))
+            def update_settings(doc):
+                settings = doc["settings"]
+                settings.update(vault_name=vault_name, theme=theme.currentData(), accent_color=accent.text(),
+                                lock_minutes=minutes.value(), sync_minutes=sync.value() if auto.isChecked() else 0,
+                                check_updates=check_updates.isChecked())
+                if check_entries.isChecked() != settings.get("entry_input", {}).get("check", True):
+                    settings.setdefault("entry_input", {})["check"] = check_entries.isChecked()
+            self.session.mutate(update_settings)
             self.preferences.save_close_action(close_action.currentData())
             self.cloud.reset_schedule()
             self.apply_theme()

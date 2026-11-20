@@ -2,7 +2,8 @@ import { bulkEdit } from './bulk-entries.js';
 import { EXTRA_FIELDS, FIELD_LABELS, additionalFields, migrateOldPasswords, splitPasswords, nextPasswordNumber } from './additional-fields.js';
 import { sortEntries, savedEntryOrder, rememberEntryOrder } from './entry-order.js';
 import { matchesEntry } from './search.js';
-import { suggestions, SUGGESTION_FIELDS } from './suggestions.js';
+import { suggestionSources, hideSuggestion, SUGGESTION_FIELDS } from './suggestions.js';
+import { CREDENTIAL_FIELDS, FIELD_NAMES, SPACE_MESSAGE, hasSpace, spaceFields, spaceProblems, repairSpaces } from './entry-review.js';
 import { categoryRows, visibleCategoryRows, moveCategory, descendants, validateParents, removeCategory } from './categories.js';
 import { FIELDS, passwordTitle, defaultGenerator, generate, inspect, validatePassword, charLength, canonical } from './core.js';
 import { listVaults, getVault, putVault, forgetVault, saveSnapshot } from './storage.js';
@@ -39,7 +40,7 @@ const now = () => new Date().toISOString();
 const clone = value => structuredClone(value);
 const state = { view: 'home', recent: [], record: null, token: null, doc: null, create: null, selected: null, category: 'all', entrySort: savedEntryOrder(), query: '', dirty: false, busy: false, generation: 0 };
 let worker, calls = new Map(), toastTimer, clipTimer, copiedPassword, lastActivity = Date.now();
-const APP_VERSION = '0.43.0';
+const APP_VERSION = '0.43.1';
 let updateChecked = false, updateRequest;
 async function checkUpdates(manual = false) {
   if (updateRequest || (!manual && updateChecked)) return;
@@ -50,17 +51,35 @@ async function checkUpdates(manual = false) {
     const current = APP_VERSION.split('.').map(Number), candidate = version.split('.').map(Number);
     const difference = current.map((part, index) => (candidate[index] || 0) - part).find(delta => delta !== 0);
     if (difference > 0) toast('Доступна версия ' + version + '. Откройте «Версии приложения» в настройках.');
-    else if (manual) toast('Установлена актуальная версия.');
+    else if (manual) toast('Установлена последняя версия ' + APP_VERSION);
   } catch (failure) {
     if (manual) throw failure;
   } finally { updateRequest = null; }
 }
-function scheduleUpdateCheck() {
-  if (!updateChecked && state.doc?.settings.check_updates !== false) {
-    setTimeout(() => { if (state.doc && state.doc.settings.check_updates !== false) void checkUpdates(); }, 3000);
+let startupChecks;
+function refreshStartupBadge() {
+  document.querySelector('#startup-sync').hidden = !startupChecks ||
+    startupChecks.token !== state.token || state.view !== 'workspace' ||
+    !(startupChecks.updates || startupChecks.cloud);
+}
+function startVaultChecks() {
+  const checks = {
+    token: state.token,
+    updates: state.doc.settings.check_updates !== false && (!updateChecked || !!updateRequest),
+    cloud: !!state.record?.drive && connected()
+  };
+  startupChecks = checks;
+  refreshStartupBadge();
+  if (checks.cloud) remoteCheckPending = true;
+  if (checks.updates) {
+    const pending = updateRequest || checkUpdates();
+    void pending.catch(() => {}).finally(() => {
+      checks.updates = false;
+      refreshStartupBadge();
+    });
   }
 }
-let syncJob, uiIdle = Promise.resolve();
+let syncJob, uiIdle = Promise.resolve(), suggestionPopup;
 let remoteCheckPending = false, remoteCheckDeclined = false;
 let driveController, driveIdentity, cloudCopies = [], oldVaults = [], oauthPending = false;
 const syncSchedule = new SyncSchedule();
@@ -86,7 +105,7 @@ function startWorker() {
 }
 function rpc(operation, args) { startWorker(); return new Promise((resolve, reject) => { const id = crypto.randomUUID(); calls.set(id, { resolve, reject }); worker.postMessage({ id, operation, args }); }); }
 function stopWorker() { worker?.terminate(); worker = null; for (const call of calls.values()) call.reject(new Error('Хранилище заблокировано.')); calls.clear(); }
-function toast(message, persistent = false) { const node = document.querySelector('#toast'); node.textContent = message; node.classList.toggle('success', message.startsWith('Синхронизация выполнена!')); node.hidden = false; clearTimeout(toastTimer); if (!persistent) toastTimer = setTimeout(() => { node.hidden = true; node.textContent = ''; }, 6500); }
+function toast(message, persistent = false) { const node = document.querySelector('#toast'); node.textContent = message; node.classList.toggle('success', ['Синхронизация выполнена!', 'Установлена последняя версия'].some(text => message.startsWith(text))); node.hidden = false; clearTimeout(toastTimer); if (!persistent) toastTimer = setTimeout(() => { node.hidden = true; node.textContent = ''; }, 6500); }
 function error(message) { toast(message); const node = document.querySelector('#form-error'); if (node) { node.textContent = message; node.setAttribute('role', 'alert'); } else toast(message); }
 function setBusy(value) { state.busy = value; document.body.classList.toggle('busy', value); document.body.setAttribute('aria-busy', String(value)); }
 async function withUiLock(action) {
@@ -283,13 +302,14 @@ function phoneDashboard() {
 let phoneHome = true;
 function workspace() {
   applyAppearance();
-  if (state.view !== 'workspace') scheduleUpdateCheck();
+  const opening = state.view !== 'workspace';
   state.view = 'workspace'; document.title = state.record.name + ' — Password Manager';
   app.innerHTML = `<div class="workspace ${phoneHome ? 'phone-home' : 'phone-list'} ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<button class="mobile-nav-backdrop" data-action="mobile-nav-close" aria-label="Закрыть меню" tabindex="-1"></button><section class="entry-column">${phoneDashboard()}<div class="entry-toolbar"><div class="entry-toolbar-top"><button class="mobile-nav-toggle icon-button" data-action="mobile-nav" aria-label="Открыть меню" aria-controls="workspace-navigation" aria-expanded="false">☰</button><button class="phone-back quiet" data-action="phone-home" aria-label="Все категории">${icon('back')} Категории</button><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div><label class="entry-sort-label" for="entry-sort">Сортировка<select id="entry-sort"><option value="title" ${state.entrySort === 'title' ? 'selected' : ''}>По алфавиту (А–Я)</option><option value="updated" ${state.entrySort === 'updated' ? 'selected' : ''}>По изменению (сначала новые)</option><option value="category" ${state.entrySort === 'category' ? 'selected' : ''}>По категориям</option></select></label></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
   document.querySelectorAll('[data-category-color]').forEach(node => { node.style.color = node.dataset.categoryColor; });
   applyEntryColors();
   renderEditor();
   setMobileNav(false);
+  if (opening) startVaultChecks();
 }
 
 function refreshSelectionList() {
@@ -351,6 +371,7 @@ function listActions() {
   return `<button class="danger secondary small" data-action="empty-trash" ${count ? '' : 'disabled'}>Очистить корзину</button>`;
 }
 function renderEditor(draft) {
+  clearSuggestionPopup();
   const target = document.querySelector('#record-editor'); if (!target) return;
   const entry = draft || state.doc.entries[state.selected];
   if (!entry && !state.editingNew) { target.innerHTML = `<div class="editor-top"><span>${icon('lock')} Личное хранилище</span><div class="editor-actions"><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button></div></div><div class="empty-state">${icon('key')}<h2>Всё начинается с одной записи</h2><p>Сохраните первый аккаунт.<br>Название, логин и пароль — всё будет<br>зашифровано на вашем устройстве.</p><button class="primary" data-action="new-entry">Добавить запись</button></div>`; return; }
@@ -358,27 +379,22 @@ function renderEditor(draft) {
   const viewing = !!entry && !state.editingEntry;
   const passwordOnly = entry ? entry.entry_type === 'password' : state.category === 'other-passwords';
   const extra = additionalFields(values);
-  const advanced = !!values.second_password || Object.values(extra).some(items => items.length);
+  const advanced = !!values.allow_spaces || !!values.second_password || Object.values(extra).some(items => items.length);
   const editable = !viewing && !entry?.deleted_at;
   const field = (key, value, index = null) => {
     const secret = ['password', 'second_password'].includes(key);
     const id = index === null ? `entry-${key}` : `entry-${key}-${index}`;
     const label = FIELD_LABELS[key] + (index === null ? '' : ` №${index + 2}`);
-    return `<div class="field ${key === 'second_password' || index !== null ? 'advanced-field' : ''}" ${!advanced && (key === 'second_password' || index !== null) ? 'hidden' : ''}><label for="${id}">${label}${index !== null && editable ? `<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button>` : ''}${index === null && EXTRA_FIELDS.includes(key) && editable && !passwordOnly ? `<button type="button" class="add-field" data-action="add-field" data-field="${key}" aria-label="Добавить: ${label}" ${advanced ? '' : 'hidden'}>+</button>` : ''}</label><input id="${id}" ${index === null ? `name="${key}"` : `data-extra-field="${key}"`} type="${secret ? 'password' : 'text'}" value="${esc(value || '')}" autocomplete="off" maxlength="100000" ${editable ? '' : 'readonly'} ${key === 'title' ? 'required' : ''} ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">${icon('copy')}Копировать</button>${key === 'password' && index === null && editable ? '<button type="button" data-action="generate-entry">Сгенерировать</button>' : ''}</div>` : ''}</div>`;
+    return `<div class="field ${key === 'second_password' || index !== null ? 'advanced-field' : ''}" ${!advanced && (key === 'second_password' || index !== null) ? 'hidden' : ''}><label for="${id}">${label}${index !== null && editable ? `<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button>` : ''}${index === null && EXTRA_FIELDS.includes(key) && editable && !passwordOnly ? `<button type="button" class="add-field" data-action="add-field" data-field="${key}" aria-label="Добавить: ${label}" ${advanced ? '' : 'hidden'}>+</button>` : ''}</label><input id="${id}" ${index === null ? `name="${key}"` : `data-extra-field="${key}"`} type="${secret ? 'password' : 'text'}" value="${esc(value || '')}" autocomplete="off" maxlength="100000" ${editable ? '' : 'readonly'} ${key === 'title' ? 'required' : ''} >${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">${icon('copy')}Копировать</button>${key === 'password' && index === null && editable ? '<button type="button" data-action="generate-entry">Сгенерировать</button>' : ''}</div>` : ''}</div>`;
   };
   const fields = (passwordOnly ? ['password', 'note'] : Object.keys(FIELD_LABELS)).map(key => {
     if (key === 'note') return `<div class="field" ${!editable && !values.note ? 'hidden' : ''}><label for="entry-note">Заметка</label><textarea id="entry-note" name="note" maxlength="100000" ${editable ? '' : 'readonly'}>${esc(values.note)}</textarea></div>`;
     if (!editable && !values[key] && !(extra[key] || []).some(Boolean)) return '';
     return `<div data-field-group="${key}">${field(key, values[key])}${(extra[key] || []).map((value, index) => field(key, value, index)).join('')}</div>`;
   }).join('');
-  target.innerHTML = `<header class="editor-top"><button class="mobile-menu" data-action="back-list">${icon('back')}Все записи</button><span class="save-state">${entry?.deleted_at ? 'В корзине' : savedStatus()}</span><div class="editor-actions"><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div></header><form id="entry-form" class="editor-content" data-entry-type="${passwordOnly ? 'password' : 'account'}"><div class="editor-heading"><span class="record-badge">${passwordOnly ? '*' : entry ? esc(initials(entry.title)) : icon('plus')}</span><div><h1>${entry ? esc(entry.title) : passwordOnly ? 'Прочий пароль' : 'Новая запись'}</h1><p>${passwordOnly ? 'Пароль и заметка' : 'Учётные данные'}</p></div></div>${fields}${passwordOnly ? '' : `<div class="field"><label for="entry-category">Категория</label><select id="entry-category" name="category" ${editable ? '' : 'disabled'}><option value="">Без категории</option>${categoryRows(state.doc).map(({id, path}) => `<option value="${esc(id)}" ${values.category === id ? 'selected' : ''}>${esc(path)}</option>`).join('')}</select></div>`}<div class="entry-options"><label><input type="checkbox" id="entry-reveal">Показать пароль</label>${passwordOnly ? '' : `<button type="button" class="advanced-options" data-action="advanced-options" aria-pressed="${advanced}">Продвинутые настройки</button>`}</div><p id="form-error" class="form-error"></p><div class="editor-bottom">${entry?.deleted_at ? '<button class="quiet" type="button" data-action="restore-entry">Восстановить</button><button class="danger secondary" type="button" data-action="purge-entry">Удалить навсегда</button>' : `<button class="quiet ${entry ? 'danger' : ''}" type="button" data-action="${entry ? 'trash-entry' : 'cancel-entry'}">${entry ? 'В корзину' : 'Отмена'}</button><button class="primary" type="${viewing ? 'button' : 'submit'}" ${viewing ? 'data-action="edit-entry"' : ''}>${viewing ? 'Редактировать' : 'Сохранить'}</button>`}</div></form>`;
+  target.innerHTML = `<header class="editor-top"><button class="mobile-menu" data-action="back-list">${icon('back')}Все записи</button><span class="save-state">${entry?.deleted_at ? 'В корзине' : savedStatus()}</span><div class="editor-actions"><button class="icon-button quiet" data-action="export" aria-label="Скачать зашифрованную копию">${icon('download')}</button><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div></header><form id="entry-form" class="editor-content" data-entry-type="${passwordOnly ? 'password' : 'account'}"><div class="editor-heading"><span class="record-badge">${passwordOnly ? '*' : entry ? esc(initials(entry.title)) : icon('plus')}</span><div><h1>${entry ? esc(entry.title) : passwordOnly ? 'Прочий пароль' : 'Новая запись'}</h1><p>${passwordOnly ? 'Пароль и заметка' : 'Учётные данные'}</p></div></div>${fields}${passwordOnly ? '' : `<div class="field"><label for="entry-category">Категория</label><select id="entry-category" name="category" ${editable ? '' : 'disabled'}><option value="">Без категории</option>${categoryRows(state.doc).map(({id, path}) => `<option value="${esc(id)}" ${values.category === id ? 'selected' : ''}>${esc(path)}</option>`).join('')}</select></div>`}<div class="entry-options"><label><input type="checkbox" id="entry-reveal">Показать пароль</label><button type="button" class="advanced-options" data-action="advanced-options" aria-pressed="${advanced}">Продвинутые настройки</button></div><label class="advanced-field" ${advanced && editable ? '' : 'hidden'}><input type="checkbox" name="allow_spaces" ${values.allow_spaces ? 'checked' : ''} ${editable ? '' : 'disabled'}> Разрешить пробелы в этой записи</label><p id="form-error" class="form-error"></p><div class="editor-bottom">${entry?.deleted_at ? '<button class="quiet" type="button" data-action="restore-entry">Восстановить</button><button class="danger secondary" type="button" data-action="purge-entry">Удалить навсегда</button>' : `<button class="quiet ${entry ? 'danger' : ''}" type="button" data-action="${entry ? 'trash-entry' : 'cancel-entry'}">${entry ? 'В корзину' : 'Отмена'}</button><button class="primary" type="${viewing ? 'button' : 'submit'}" ${viewing ? 'data-action="edit-entry"' : ''}>${viewing ? 'Редактировать' : 'Сохранить'}</button>`}</div></form>`;
   target.querySelector('#entry-form').dataset.entryColor = values.color || '';
   target.querySelector('#entry-form').dataset.category = values.category || '';
-  for (const key of SUGGESTION_FIELDS) {
-    const list = document.createElement('datalist'); list.id = `suggest-${key}`;
-    for (const value of suggestions(state.doc, key)) { const option = document.createElement('option'); option.value = value; list.append(option); }
-    target.querySelector('form').append(list);
-  }
   target.querySelector('#entry-reveal').addEventListener('change', event => {
     target.querySelectorAll('[name="password"],[name="second_password"],[data-extra-field="password"],[data-extra-field="second_password"]').forEach(node => { node.type = event.target.checked ? 'text' : 'password'; });
   });
@@ -391,6 +407,7 @@ function editorValues() {
   const additional = {};
   form.querySelectorAll('[data-extra-field]').forEach(node => { (additional[node.dataset.extraField] ||= []).push(node.value); });
   if (Object.keys(additional).length) values.additional_fields = additional;
+  if (data.has('allow_spaces')) values.allow_spaces = true;
   if (form.dataset.entryColor) values.color = form.dataset.entryColor;
   if (form.dataset.entryType === 'password') { values.entry_type = 'password'; values.category = form.dataset.category || null; values.title = passwordTitle(values.note); }
   return values;
@@ -398,6 +415,9 @@ function editorValues() {
 async function saveEntry() {
   if (state.selected && !state.editingEntry) return;
   const values = editorValues(); if (!values?.title.trim()) throw new Error('Укажите название записи.');
+  const old = state.doc.entries[state.selected];
+  if (spaceFields(values).some(key => old?.allow_spaces || (values[key] || '') !== (old?.[key] || '') ||
+      JSON.stringify(values.additional_fields?.[key] || []) !== JSON.stringify(old?.additional_fields?.[key] || []))) throw new Error(SPACE_MESSAGE);
   if (values.entry_type === 'password' && !values.password) throw new Error('Укажите пароль.');
   const next = clone(state.doc), id = state.selected || crypto.randomUUID();
   next.entries[id] = { ...values, id, deleted_at: null, updated_at: now() }; next.drafts = {};
@@ -441,6 +461,7 @@ async function lock() {
   // memory if their destination is unavailable; the UI never claims disk persistence.
   const record = state.record, values = state.dirty ? editorValues() : null;
   state.view = 'locking';
+  refreshStartupBadge();
   closeModal(); app.replaceChildren(); state.generation++;
   let failure = false;
   if (values) { const next = clone(state.doc); next.drafts[state.selected || 'new'] = values; try { await persist(next, true); } catch { failure = true; } }
@@ -450,7 +471,7 @@ async function lock() {
   stopWorker(); state.token = null; state.doc = null; state.selected = null; state.editingNew = false; state.dirty = false;
   clearClipboard(); unlockScreen(locked); if (failure) toast('Не удалось сохранить часть изменений на телефоне. После разблокировки экспортируйте .pmvault и проверьте свободное место.');
 }
-async function openRecord(record) { state.generation++; stopWorker(); state.token = null; state.doc = null; state.dirty = false; state.selected = null; state.editingNew = false; unlockScreen(record); }
+async function openRecord(record) { state.generation++; stopWorker(); state.token = null; state.doc = null; state.dirty = false; state.selected = null; state.editingNew = false; refreshStartupBadge(); unlockScreen(record); }
 async function importFile(file) {
   if (!file) return; if (file.size > 16 * 1024 * 1024) throw new Error('Максимальный размер хранилища — 16 МиБ.');
   const blob = new Uint8Array(await file.arrayBuffer()); inspect(blob);
@@ -490,6 +511,7 @@ async function doUnlock() {
     const choice = await ask('Продолжить черновик?', 'Перед блокировкой были сохранены незавершённые изменения.', [{ value: 'cancel', label: 'Позже' }, { value: 'resume', label: 'Продолжить', primary: true }]);
     if (choice === 'resume' && state.doc) { const [id, draft] = Object.entries(state.doc.drafts)[0]; state.selected = state.doc.entries[id] ? id : null; state.editingNew = !state.selected; workspace(); state.editingEntry = true; renderEditor(draft); state.dirty = true; }
   }
+  if (!state.dirty && state.doc.settings.entry_input?.check !== false && !state.lockRequested) await checkEntrySpaces(false);
 }
 function generator(intoEditor = false) {
   const options = generatorOptions;
@@ -506,7 +528,7 @@ function syncSettingsFields() {
 }
 function settings() {
   const status = !connected() || !state.record.drive ? ['не подключен', 'disconnected'] : state.record.cloudPending || state.doc.sync?.pending ? ['Требует синхронизации', 'pending'] : ['Подключен', 'connected'];
-  showModal('Настройки хранилища', `<form id="settings-form" class="form"><h3>Кастомизация</h3><div class="field"><label for="settings-accent">Основной цвет интерфейса</label><input id="settings-accent" name="accent_color" type="hidden" value="${esc(state.doc.settings.accent_color || '#8864cb')}"><button id="accent-color-button" type="button" class="secondary" data-action="choose-accent">${esc(state.doc.settings.accent_color || '#8864cb')}</button></div><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><hr class="settings-separator"><h3>Общие</h3><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Экспортировать файл</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="deletion-settings">Удаление/Отключение</button><hr class="settings-separator"><label><input type="checkbox" name="check_updates" ${state.doc.settings.check_updates !== false ? 'checked' : ''}> Проверять обновления при запуске</label><button type="button" class="secondary settings-single" data-action="check-updates">Проверить обновления</button><button type="button" class="secondary settings-single" data-action="show-releases">Версии приложения</button><p class="storage-summary">Изменения автоматически сохраняются в зашифрованном виде на телефоне. Экспортируйте файл или подключите Google Drive для резервной копии.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
+  showModal('Настройки хранилища', `<form id="settings-form" class="form"><h3>Кастомизация</h3><div class="field"><label for="settings-accent">Основной цвет интерфейса</label><input id="settings-accent" name="accent_color" type="hidden" value="${esc(state.doc.settings.accent_color || '#8864cb')}"><button id="accent-color-button" type="button" class="secondary" data-action="choose-accent">${esc(state.doc.settings.accent_color || '#8864cb')}</button></div><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><hr class="settings-separator"><h3>Общие</h3><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Экспортировать файл</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="deletion-settings">Удаление/Отключение</button><hr class="settings-separator"><label><input type="checkbox" name="check_updates" ${state.doc.settings.check_updates !== false ? 'checked' : ''}> Проверять обновления при запуске</label><button type="button" class="secondary settings-single" data-action="check-updates">Проверить обновления</button><button type="button" class="secondary settings-single" data-action="show-releases">Версии приложения</button><label><input type="checkbox" name="check_entries" ${state.doc.settings.entry_input?.check !== false ? 'checked' : ''}> Правильность написания записей при запуске</label><button type="button" class="secondary settings-single" data-action="check-entries">Проверить правильность записей</button><p class="storage-summary">Изменения автоматически сохраняются в зашифрованном виде на телефоне. Экспортируйте файл или подключите Google Drive для резервной копии.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
 }
 async function commitSyncStage(staged) {
   try {
@@ -621,12 +643,27 @@ async function connectDrive(node) {
     if (notice.textContent === 'Подключение..') notice.hidden = true;
   }
 }
-async function listCloud() {
-  const transport = await driveTransport(); cloudCopies = await transport.checkpoints();
+async function listCloud(refresh = true) {
+  if (refresh) { const transport = await driveTransport(); cloudCopies = await transport.checkpoints(); }
   const { latest, others } = groupCopies(cloudCopies, lastOpenedVault());
   const times = copyTimes(cloudCopies);
-  const row = (copy, pinned = false) => `<div class="backup-row cloud-copy ${pinned ? 'last-opened-copy' : ''}" data-copy-id="${esc(copy.id)}"><div><strong>${esc(copy.vaultName || copy.name || 'Хранилище')}</strong><small>${esc(times.get(copy.id))}</small><small>${esc(copy.name)}</small></div><button class="secondary small" data-action="drive-open" data-index="${cloudCopies.indexOf(copy)}">Открыть</button><button class="danger secondary small" data-action="drive-delete" data-index="${cloudCopies.indexOf(copy)}">Удалить хранилище</button></div>`;
+  const row = (copy, pinned = false) => `<div class="backup-row cloud-copy ${pinned ? 'last-opened-copy' : ''}" data-copy-id="${esc(copy.id)}"><div><strong>${esc(copy.vaultName || copy.name || 'Хранилище')}</strong><small>${esc(times.get(copy.id))}</small><small>${esc(copy.name)}</small></div>${state.doc ? `<button class="secondary small" data-action="drive-compare" data-index="${cloudCopies.indexOf(copy)}">Различия</button>` : ''}<button class="secondary small" data-action="drive-open" data-index="${cloudCopies.indexOf(copy)}">Открыть</button><button class="danger secondary small" data-action="drive-delete" data-index="${cloudCopies.indexOf(copy)}">Удалить хранилище</button></div>`;
   showModal('Копии в Google Drive', `<p>Новые копии показаны первыми. Время сохранения указано в UTC.</p>${latest ? `<section class="last-opened-section"><h3>Последнее открытое хранилище</h3>${row(latest, true)}</section>` : ''}${others.length ? `<h3>Все резервные копии</h3>${others.map(copy => row(copy)).join('')}` : ''}${!cloudCopies.length ? '<p>В Google Drive пока нет доступных копий хранилищ.</p>' : ''}<p id="form-error" class="form-error"></p>`);
+}
+function changeList(changes) {
+  if (!changes.length) return '<p>Изменившихся записей нет.</p>';
+  return '<ul class="entry-review">' + changes.map(({title, fields}) =>
+    '<li><strong>' + esc(title) + '</strong><span>' + esc(fields.join(', ')) + '</span></li>').join('') + '</ul>';
+}
+async function checkEntrySpaces(manual) {
+  if (!state.doc || (manual && !await confirmLeave())) return;
+  const issues = spaceProblems(state.doc);
+  if (!issues.length) { if (manual) toast('Записи проверены. Проблем с пробелами нет.'); return; }
+  showModal('Проверка правильности записей',
+    '<p>Пробелы найдены в перечисленных полях. Можно исправить каждую запись вручную или применить исправление ко всем записям.</p>' +
+    '<ul class="entry-review">' + issues.map(({entry, fields}) => '<li><button type="button" class="secondary" data-action="edit-space-issue" data-id="' + esc(entry.id) + '">' +
+      esc(entry.title) + '</button><span>' + esc(fields.map(field => FIELD_NAMES[field]).join(', ')) + '</span></li>').join('') +
+    '</ul><div class="modal-actions"><button class="secondary" data-action="close-modal">Позже</button><button class="primary" data-action="repair-spaces">Исправить автоматически</button></div>');
 }
 function showConflicts() {
   const all = state.doc.sync ? conflicts(state.doc.sync.state) : {};
@@ -666,6 +703,27 @@ async function deleteCloudVault(copy) {
 }
 
 const actions = {
+  'check-entries': () => checkEntrySpaces(true),
+  'repair-spaces': async () => {
+    const approval = await ask('Исправить пробелы?', 'Пробелы будут удалены из перечисленных полей, включая пароли.', [{value:'cancel',label:'Отмена'},{value:'repair',label:'Исправить',primary:true}]);
+    if (approval !== 'repair') { await checkEntrySpaces(false); return; }
+    const next = clone(state.doc);
+    repairSpaces(next);
+    await persist(next);
+    workspace();
+    toast(spaceProblems(state.doc).length ? 'Некоторые записи требуют ручной правки.' : 'Пробелы исправлены');
+  },
+  'edit-space-issue': node => {
+    const entry = state.doc.entries[node.dataset.id];
+    if (!entry) return;
+    closeModal();
+    phoneHome = false;
+    state.selected = entry.id;
+    state.editingNew = false;
+    state.editingEntry = !entry.deleted_at;
+    state.dirty = false;
+    workspace();
+  },
   'deletion-settings': () => {
     closeModal();
     showModal('Удаление/Отключение', `<section class="danger-zone"><button type="button" class="danger secondary settings-single" data-action="delete-cloud-versions">Удалить облачные версии</button><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить локальное сохранение</button><button type="button" class="danger secondary settings-single" data-action="uninstall-app">Удалить приложение</button></section><div class="modal-actions"><button type="button" class="secondary" data-action="deletion-back">Назад</button></div>`);
@@ -702,6 +760,16 @@ const actions = {
     }
     driveDialog();
   },
+  'drive-compare': async node => {
+    const copy = cloudCopies[Number(node.dataset.index)];
+    if (!copy || !state.token) return;
+    const transport = await driveTransport();
+    const blob = await transport.readCheckpoint(copy.id);
+    if (inspect(blob).header.vault_id !== inspect(state.record.blob).header.vault_id) throw new Error('Для сравнения откройте соответствующее хранилище.');
+    const changes = await rpc('compare-copy', { token: state.token, blob, version: copy.version });
+    showModal('Различия с копией Google Drive', changeList(changes) + '<div class="modal-actions"><button class="secondary" data-action="cloud-compare-back">Назад</button></div>');
+  },
+  'cloud-compare-back': () => listCloud(false),
   'drive-open': async node => {
     if (!await confirmLeave()) return;
     const copy = cloudCopies[Number(node.dataset.index)]; if (!copy) return;
@@ -780,7 +848,7 @@ const actions = {
     if (index >= 100) throw new Error('Можно добавить до 100 дополнительных полей каждого типа.');
     const secret = ['password','second_password'].includes(key), id = `entry-${key}-${index}`;
     const container = document.createElement('div'); container.className = 'field advanced-field';
-    container.innerHTML = `<label for="${id}">${FIELD_LABELS[key]} №${index + 2}<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button></label><input id="${id}" data-extra-field="${key}" type="${secret && !document.querySelector('#entry-reveal').checked ? 'password' : 'text'}" autocomplete="off" maxlength="100000" ${SUGGESTION_FIELDS.includes(key) ? `list="suggest-${key}"` : ''}>${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">Копировать</button></div>` : ''}`;
+    container.innerHTML = `<label for="${id}">${FIELD_LABELS[key]} №${index + 2}<button type="button" class="remove-field" data-action="remove-field" aria-label="Удалить дополнительное поле">−</button></label><input id="${id}" data-extra-field="${key}" type="${secret && !document.querySelector('#entry-reveal').checked ? 'password' : 'text'}" autocomplete="off" maxlength="100000" >${secret ? `<div class="password-buttons"><button type="button" data-action="copy-secret" data-target="${id}">Копировать</button></div>` : ''}`;
     group.append(container); state.dirty = true; container.querySelector('input').focus();
   },
   'paste-passwords': async () => {
@@ -789,6 +857,7 @@ const actions = {
     let text; try { text = AndroidVault.readClipboard(); } catch { throw new Error('Разрешите доступ к буферу обмена в браузере.'); }
     if (generation !== state.generation || !state.doc) return;
     const values = splitPasswords(text), next = clone(state.doc);
+    if (values.some(hasSpace)) throw new Error(SPACE_MESSAGE);
     let number = nextPasswordNumber(next);
     for (const password of values) { const id = crypto.randomUUID(), note = String(number++); next.entries[id] = {...Object.fromEntries(FIELDS.map(key => [key, ''])), entry_type:'password', title:passwordTitle(note), note, password, category:null, id, deleted_at:null, updated_at:now()}; }
     await persist(next); state.selected = null; state.editingNew = false; state.dirty = false; workspace(); toast(`Добавлено паролей: ${values.length}`);
@@ -845,7 +914,13 @@ const actions = {
     await persist(next); state.selected = null; state.editingNew = false; state.dirty = false; workspace(); toast('Корзина очищена');
   },
   settings: async () => settings(),
-  backups: async () => { closeModal(); const all = [state.record.blob, ...(state.record.backups || [])]; showModal('Резервные состояния', `<p>Скачайте зашифрованное состояние и откройте его как отдельную копию. Актуальное хранилище останется на месте.</p>${all.map((_, index) => `<div class="backup-row"><div><strong>${index ? 'Предыдущее состояние ' + index : 'Актуальное состояние'}</strong><small>${index ? 'Файл сохранит прежние значения записей' : 'Последняя успешная запись'}</small></div><button class="secondary small" data-action="download-backup" data-index="${index}">Скачать</button></div>`).join('')}`); },
+  backups: async () => { closeModal(); const all = [state.record.blob, ...(state.record.backups || [])]; showModal('Резервные состояния', `<p>Скачайте зашифрованное состояние и откройте его как отдельную копию. Актуальное хранилище останется на месте.</p>${all.map((_, index) => `<div class="backup-row"><div><strong>${index ? 'Предыдущее состояние ' + index : 'Актуальное состояние'}</strong><small>${index ? 'Файл сохранит прежние значения записей' : 'Последняя успешная запись'}</small></div>${index ? `<button class="secondary small" data-action="compare-backup" data-index="${index}">Различия</button>` : ''}<button class="secondary small" data-action="download-backup" data-index="${index}">Скачать</button></div>`).join('')}`); },
+  'compare-backup': async node => {
+    const blob = state.record.backups?.[Number(node.dataset.index) - 1];
+    if (!blob) return;
+    const changes = await rpc('compare-copy', { token: state.token, blob });
+    showModal('Различия с резервным состоянием', changeList(changes) + '<div class="modal-actions"><button class="secondary" data-action="backups">Назад</button></div>');
+  },
   'download-backup': async node => { const blob = [state.record.blob, ...(state.record.backups || [])][Number(node.dataset.index)]; if (blob) download(blob, filename(state.record.name) + '-state-' + node.dataset.index + '.pmvault'); }
 };
 function categoryDropTarget(event) {
@@ -880,10 +955,108 @@ document.addEventListener('drop', event => {
 });
 document.addEventListener('dragend', () => { draggedCategory = null; });
 
+function clearSuggestionPopup() {
+  suggestionPopup?.remove();
+  suggestionPopup = null;
+}
+const entryField = input => input.dataset.extraField || input.name;
+function spacesAllowed() { return !!document.querySelector('#entry-form [name="allow_spaces"]')?.checked; }
+async function suggestionMenu(input, field, {value, entry}) {
+  clearSuggestionPopup();
+  const selection = await ask('Подсказка', 'Источник: ' + entry.title, [
+    {value:'cancel',label:'Закрыть'}, {value:'hide',label:'Удалить подсказку'}
+  ]);
+  if (selection === 'hide') {
+    const next = clone(state.doc);
+    hideSuggestion(next, field, value);
+    await persist(next, true);
+  }
+  if (input.isConnected && !state.lockRequested) {
+    input.focus();
+    showSuggestions(input);
+  }
+}
+function showSuggestions(input) {
+  clearSuggestionPopup();
+  const field = entryField(input), query = input.value.toLowerCase();
+  if (!state.doc || input.readOnly || !SUGGESTION_FIELDS.includes(field)) return;
+  const items = suggestionSources(state.doc, field).filter(item => item.value.toLowerCase().includes(query) && item.value !== input.value).slice(0, 10);
+  if (!items.length) return;
+  const list = document.createElement('div');
+  list.className = 'suggestion-popup';
+  list.setAttribute('aria-label', 'Подсказки');
+  for (const item of items) {
+    const control = document.createElement('button');
+    control.type = 'button';
+    control.className = 'secondary';
+    control.textContent = item.value;
+    let timer, start, held = false;
+    const clear = () => { clearTimeout(timer); start = null; };
+    const menu = () => {
+      clear();
+      if (held) return;
+      held = true;
+      void safe(() => suggestionMenu(input, field, item));
+    };
+    control.addEventListener('pointerdown', event => {
+      held = false;
+      if (event.pointerType !== 'mouse') {
+        start = [event.clientX, event.clientY];
+        timer = setTimeout(menu, 530);
+      }
+    });
+    control.addEventListener('pointermove', event => {
+      if (start && Math.hypot(event.clientX - start[0], event.clientY - start[1]) > 10) clear();
+    });
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) control.addEventListener(type, clear);
+    control.addEventListener('contextmenu', event => { event.preventDefault(); menu(); });
+    control.addEventListener('keydown', event => {
+      if (event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey)) { event.preventDefault(); menu(); }
+    });
+    control.addEventListener('click', () => {
+      if (held) return;
+      if (!spacesAllowed() && hasSpace(item.value)) { toast(SPACE_MESSAGE); return; }
+      input.focus();
+      input.value = item.value;
+      input.dispatchEvent(new Event('input', {bubbles:true}));
+      clearSuggestionPopup();
+    });
+    list.append(control);
+  }
+  input.after(list);
+  suggestionPopup = list;
+}
+function acceptsCredentialInput(input) {
+  return input.matches?.('#entry-form input') && CREDENTIAL_FIELDS.includes(entryField(input));
+}
+document.addEventListener('beforeinput', event => {
+  if (acceptsCredentialInput(event.target) && !spacesAllowed() &&
+      hasSpace(event.data || event.dataTransfer?.getData('text/plain') || '')) {
+    event.preventDefault();
+    toast(SPACE_MESSAGE);
+  }
+});
+document.addEventListener('paste', event => {
+  if (acceptsCredentialInput(event.target) && !spacesAllowed() && hasSpace(event.clipboardData?.getData('text/plain') || '')) {
+    event.preventDefault();
+    toast(SPACE_MESSAGE);
+  }
+});
+document.addEventListener('focusin', event => {
+  if (acceptsCredentialInput(event.target)) showSuggestions(event.target);
+  else if (!event.target.closest('.suggestion-popup')) clearSuggestionPopup();
+});
+document.addEventListener('pointerdown', event => {
+  if (!event.target.closest('.suggestion-popup') && !acceptsCredentialInput(event.target)) clearSuggestionPopup();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && suggestionPopup) clearSuggestionPopup();
+});
+
 document.addEventListener('click', e => {
   document.querySelector('#record-context-menu')?.remove();
   const node = e.target.closest('[data-action]'); if (!node || node.disabled) return;
-  if (syncJob && ['drive-start', 'drive-connect', 'drive-open', 'drive-list', 'drive-delete', 'drive-sync', 'drive-disconnect', 'drive-resolve', 'delete-cloud-versions', 'delete-vault', 'uninstall-app'].includes(node.dataset.action)) {
+  if (syncJob && ['drive-start', 'drive-connect', 'drive-open', 'drive-compare', 'drive-list', 'drive-delete', 'drive-sync', 'drive-disconnect', 'drive-resolve', 'delete-cloud-versions', 'delete-vault', 'uninstall-app'].includes(node.dataset.action)) {
     e.preventDefault();
     toast('Дождитесь завершения обмена с Google Drive.');
     return;
@@ -901,6 +1074,7 @@ document.addEventListener('change', e => {
   if (e.target.id === 'recovery-confirm') document.querySelector('#finish-create').disabled = !e.target.checked;
 });
 document.addEventListener('input', e => {
+  if (acceptsCredentialInput(e.target)) showSuggestions(e.target);
   if (e.target.closest('#entry-form')) { state.dirty = true; const label = document.querySelector('.save-state'); if (label) label.textContent = 'Есть несохранённые изменения'; }
   if (e.target.id === 'search') { state.query = e.target.value; document.querySelector('.workspace')?.classList.toggle('phone-searching', !!state.query); document.querySelector('#records').innerHTML = recordList(); applyEntryColors(); document.querySelector('#list-foot').textContent = visibleEntries().length + ' записей · Зашифровано на устройстве'; }
 });
@@ -931,6 +1105,8 @@ document.addEventListener('submit', e => {
       next.settings.accent_color = new FormData(form).get('accent_color');
       next.settings.theme = new FormData(form).get('theme');
       next.settings.check_updates = new FormData(form).has('check_updates');
+      const checkEntries = new FormData(form).has('check_entries');
+      if (checkEntries !== (next.settings.entry_input?.check !== false)) (next.settings.entry_input ??= {}).check = checkEntries;
       next.settings.sync_minutes = document.querySelector('#sync-auto').checked ? Number(document.querySelector('#sync-minutes').value) : 0;
       if (!Number.isInteger(next.settings.sync_minutes) || next.settings.sync_minutes < (document.querySelector('#sync-auto').checked ? 1 : 0) || next.settings.sync_minutes > 1440) throw new Error('Интервал синхронизации: от 1 до 1440 минут, либо только вручную.');
       await persist(next, true);
@@ -961,26 +1137,42 @@ async function checkRemoteChanges(token) {
   for (const item of remote) if (seen[item.id]?.digest !== await hash(item.blob)) { changed = true; break; }
   if (!changed) { remoteCheckDeclined = false; return; }
   let choice;
+  let deferred = false;
   await syncCommit(token, async () => {
-    if (state.dirty || modal.open) { remoteCheckPending = true; return; }
+    if (state.dirty || modal.open) { remoteCheckPending = true; deferred = true; return; }
     let details = '<p>Не удалось прочитать сводку этой облачной версии.</p>';
     try {
       const changes = await rpc('sync-preview', { token: state.token, remote });
-      details = [['added', 'Добавлены'], ['removed', 'Удалены'], ['changed', 'Изменены']].map(([key, name]) => {
-        const titles = changes[key].sort((a, b) => a.localeCompare(b, 'ru'));
-        return '<h3>' + name + ' (' + titles.length + ')</h3>' +
-          (titles.length ? '<ul>' + titles.map(title => '<li>' + esc(title) + '</li>').join('') + '</ul>' : '<p>Нет записей</p>');
-      }).join('');
+      details = changeList(changes);
     } catch {}
     choice = await ask('Облачная версия обновлена', 'На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены, конфликтующие варианты сохранятся для выбора.', [{value:'cancel',label:'Позже'}, {value:'cloud',label:'Использовать облачную версию',primary:true}], '<details class="sync-details"><summary>Дополнительно</summary>' + details + '</details>');
   });
-  if (choice === undefined) return;
+  if (choice === undefined) return deferred;
   if (choice !== 'cloud') { remoteCheckDeclined = true; return; }
   await syncDrive(token, remote, transport);
 }
 function checkAutoSync() {
+  if (startupChecks?.token === state.token && (!state.record?.drive || !connected())) {
+    startupChecks.cloud = false;
+    refreshStartupBadge();
+  }
   if (syncJob || !state.doc || !state.record?.drive || !connected() || state.busy || state.dirty || modal.open || state.view !== 'workspace') return;
-  if (remoteCheckPending) { remoteCheckPending = false; startDriveJob(checkRemoteChanges); return; }
+  if (remoteCheckPending) {
+    remoteCheckPending = false;
+    const checks = startupChecks;
+    startDriveJob(async token => {
+      let retry = false;
+      try {
+        retry = await checkRemoteChanges(token);
+      } finally {
+        if (checks?.token === token && !retry) {
+          checks.cloud = false;
+          refreshStartupBadge();
+        }
+      }
+    });
+    return;
+  }
   if (remoteCheckDeclined) return;
   if (syncSchedule.due(syncMinutes(state.doc.settings))) startSync();
 }

@@ -191,7 +191,8 @@ export function newDocument() {
 function timestamp(value) { return text(value) && /(?:Z|[+-]\d\d:\d\d)$/.test(value) && Number.isFinite(Date.parse(value)); }
 function validFields(value, extra) {
   // Preserve old wire values exactly: adding empty fields would reuse causal dots.
-  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : []), ...(Object.hasOwn(value, 'additional_fields') ? ['additional_fields'] : []), ...(Object.hasOwn(value, 'color') ? ['color'] : [])]) &&
+  return object(value) && keys(value, [...FIELDS.filter(f => !optionalFields.includes(f) || Object.hasOwn(value, f)), ...extra, ...(Object.hasOwn(value, 'entry_type') ? ['entry_type'] : []), ...(Object.hasOwn(value, 'additional_fields') ? ['additional_fields'] : []), ...(Object.hasOwn(value, 'color') ? ['color'] : []), ...(Object.hasOwn(value, 'allow_spaces') ? ['allow_spaces'] : [])]) &&
+    (!Object.hasOwn(value, 'allow_spaces') || typeof value.allow_spaces === 'boolean') &&
     (!Object.hasOwn(value, 'color') || (typeof value.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.color))) &&
     (!Object.hasOwn(value, 'additional_fields') || (object(value.additional_fields) && Object.entries(value.additional_fields).every(([key, items]) => EXTRA_FIELDS.includes(key) && Array.isArray(items) && items.length <= 100 && items.every(item => text(item) && charLength(item) <= 100000)))) &&
     (!Object.hasOwn(value, 'entry_type') || ['account', 'password'].includes(value.entry_type)) &&
@@ -218,12 +219,21 @@ export function validateDocument(doc) {
     if (!validFields(draft, ['category']) || (draft.category !== null && typeof draft.category !== 'string')) fail();
   }
   const s = doc.settings;
-  if (Object.keys(s).some(k => !['theme', 'accent_color', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
+  if (Object.keys(s).some(k => !['theme', 'accent_color', 'lock_minutes', 'generator', 'sync_minutes', 'category_colors', 'check_updates', 'vault_name', 'entry_input'].includes(k)) || !['system', 'light', 'dark'].includes(s.theme) || !Number.isInteger(s.lock_minutes) || s.lock_minutes < 1 || s.lock_minutes > 1440) fail();
   if (Object.hasOwn(s, 'accent_color') && (typeof s.accent_color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(s.accent_color))) fail();
   if (Object.hasOwn(s, 'sync_minutes') && (!Number.isInteger(s.sync_minutes) || s.sync_minutes < 0 || s.sync_minutes > 1440)) fail();
   if (s.category_colors !== undefined && (!object(s.category_colors) || Object.entries(s.category_colors).some(([id, color]) => !uuidPattern.test(id) || typeof color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(color)))) fail();
   if (Object.hasOwn(s, 'vault_name') && (typeof s.vault_name !== 'string' || !s.vault_name.trim() || charLength(s.vault_name) > 100 || /[\x00-\x1f]/.test(s.vault_name))) fail();
   if (Object.hasOwn(s, 'check_updates') && typeof s.check_updates !== 'boolean') fail();
+  if (Object.hasOwn(s, 'entry_input')) {
+    const input = s.entry_input;
+    if (!object(input) || Object.keys(input).some(key => !['check', 'hidden'].includes(key)) ||
+        (Object.hasOwn(input, 'check') && typeof input.check !== 'boolean')) fail();
+    const hidden = input.hidden;
+    if (Object.hasOwn(input, 'hidden') && (!object(hidden) || Object.entries(hidden).some(([field, items]) =>
+      !['site', 'username', 'email', 'phone'].includes(field) || !Array.isArray(items) || items.length > 1000 ||
+      items.some(item => !text(item) || charLength(item) > 100000)))) fail();
+  }
   if (s.generator) generate(s.generator, true);
   if (doc.sync !== null) validateSync(doc.sync);
   return doc;

@@ -46,6 +46,7 @@ class SyncUI(QObject):
         self.timer.start(1000)
         self.transport_factory = DriveTransport
         self.remote_check_pending = False
+        self.reviewing_remote_changes = False
         self.check_timer = QTimer(self)
         self.check_timer.setSingleShot(True)
         self.check_timer.timeout.connect(self.check_remote_changes)
@@ -126,7 +127,12 @@ class SyncUI(QObject):
             if self.window.dirty or QApplication.activeModalWidget() is not None:
                 self.request_remote_check()
                 return
-            if self.confirm_remote_changes(remote):
+            self.reviewing_remote_changes = True
+            try:
+                approved = self.confirm_remote_changes(remote)
+            finally:
+                self.reviewing_remote_changes = False
+            if approved:
                 self._received(transport, remote)
             else:
                 # Do not silently consume the declined version through auto sync.
@@ -139,8 +145,7 @@ class SyncUI(QObject):
         dialog.setTextFormat(Qt.TextFormat.PlainText)
         dialog.setText("На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены, конфликтующие варианты сохранятся для выбора.")
         try:
-            changes = SyncEngine(self.window.session).preview_changes(remote)
-            details = "\n\n".join(f"{label} ({len(titles)})\n" + ("\n".join(titles) or "Нет записей") for label, titles in changes.items())
+            details = SyncEngine(self.window.session).preview_changes(remote)
         except VaultError:
             details = "Не удалось прочитать сводку этой облачной версии."
         dialog.setDetailedText(details)

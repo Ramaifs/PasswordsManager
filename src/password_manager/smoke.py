@@ -76,6 +76,7 @@ def run(output):
             window.fields["password"].setText(generate()[0])
             window.fields["second_password"].setText("SECOND-FROZEN-FICTIONAL")
             window.advanced.setChecked(True)
+            window.allow_spaces.setChecked(True)
             window.add_extra_field("password", "ADDITIONAL-FROZEN-FICTIONAL; older password")
             window.fields["note"].setPlainText("Вымышленные данные для проверки сборки.")
             window.save()
@@ -83,6 +84,7 @@ def run(output):
             assert store.open(master)[1]["entries"][eid]["email"] == "demo@example.invalid"
             results["checks"].append("gui-save-reopen")
             reopened = store.open(master)[1]["entries"][eid]
+            assert reopened["allow_spaces"] is True
             for field in ("second_password",):
                 assert reopened[field] == window.fields[field].text()
                 assert window.fields[field].echoMode() == window.fields["password"].EchoMode.Password

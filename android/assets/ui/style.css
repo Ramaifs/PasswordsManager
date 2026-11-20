@@ -112,3 +112,11 @@ input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)
  .editor-content .field-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
  .editor-content input,.editor-content textarea,.editor-content select{min-width:0}
 }
+
+.entry-review{padding:0;list-style:none;max-height:52dvh;overflow:auto}
+.entry-review li{display:flex;flex-direction:column;gap:3px;padding:8px 0;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.entry-review li span{color:var(--muted)}
+.suggestion-popup{display:grid;gap:2px;max-height:170px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:4px;background:var(--panel);user-select:none}
+.suggestion-popup button{text-align:left;white-space:normal;overflow-wrap:anywhere;min-height:38px}
+:root[data-theme=light] .toast.success{color:#237746}
+.toast.startup-sync{top:16px;bottom:auto;left:auto;pointer-events:none;color:var(--text)}

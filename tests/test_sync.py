@@ -63,9 +63,10 @@ def test_cloud_preview_names_added_removed_and_changed_entries_without_writing(c
     b.mutate(lambda doc: model.trash(doc, removed))
     SyncEngine(b).exchange(drive)
     before = deepcopy(a.document)
-    assert SyncEngine(a).preview_changes(drive.fetch()) == {
-        "Добавлены": ["added"], "Удалены": ["removed"], "Изменены": ["changed"]
-    }
+    assert SyncEngine(a).preview_changes(drive.fetch()).splitlines() == [
+        "added — Добавлена", "changed — Изменено поле «название», Изменено поле «пароль»",
+        "removed — В корзине",
+    ]
     assert a.document == before
 
 

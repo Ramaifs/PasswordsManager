@@ -1,5 +1,6 @@
 import * as core from './core.js';
 import * as sync from './sync.js';
+import { entryChanges } from './entry-review.js';
 const sessions = new Map();
 self.onmessage = async ({ data }) => {
   const { id, operation, args } = data;
@@ -43,6 +44,11 @@ self.onmessage = async ({ data }) => {
     }
     if (operation === 'sync-preview') {
       self.postMessage({ id, result: await sync.previewChanges(session.access, session.document, session.actor, args.remote) }); return;
+    }
+    if (operation === 'compare-copy') {
+      const bytes = new Uint8Array(args.blob);
+      const other = args.version ? await sync.openWireCopy(session.access, bytes, args.version) : await core.decodeVault(session.access, bytes);
+      self.postMessage({ id, result: entryChanges(session.document, other) }); return;
     }
     if (operation === 'update') {
       const next = structuredClone(args.document);

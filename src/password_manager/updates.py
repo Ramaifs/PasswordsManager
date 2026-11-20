@@ -192,7 +192,7 @@ class UpdateChecker(QObject):
     def schedule(self):
         if not self.scheduled and self.window.session.document['settings'].get('check_updates', True):
             self.scheduled = True
-            QTimer.singleShot(3000, lambda: self.check() if self.window.session.unlocked and self.window.session.document['settings'].get('check_updates', True) else None)
+            self.check()
 
     def check(self, manual=False):
         if self.busy:
@@ -231,7 +231,13 @@ class UpdateChecker(QObject):
         dialog.setWindowTitle("Скачать и установить версию")
         dialog.setMinimumWidth(470)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel(f"Установлена версия {__version__}. Источник: GitHub {REPOSITORY}"))
+        latest = max(version_tuple(release["version"]) for release in releases)
+        current = version_tuple(__version__)
+        installed = QLabel(f"Установлена версия {__version__}. Источник: GitHub {REPOSITORY}")
+        if current == latest:
+            installed.setText(f"Установлена последняя версия {__version__}")
+            installed.setStyleSheet("color: #237746;" if not getattr(self.window, "_dark_theme", True) else "color: #48bf7b;")
+        layout.addWidget(installed)
         versions = QComboBox()
         versions.setObjectName("updateVersions")
         for release in releases:

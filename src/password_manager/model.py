@@ -11,6 +11,12 @@ OPTIONAL_FIELDS = {"second_password", "old_passwords"}
 SECRET_FIELDS = {"password", *OPTIONAL_FIELDS}
 SUGGESTION_FIELDS = ("email", "phone", "username", "site")
 EXTRA_FIELDS = (*SUGGESTION_FIELDS, "password", "second_password")
+CREDENTIAL_FIELDS = (*SUGGESTION_FIELDS, "password", "second_password", "old_passwords")
+SPACE_MESSAGE = "Знак пробела запрещено писать в записях (доступно только через продвинутые настройки)"
+FIELD_NAMES = dict(title="название", site="сайт", username="логин", email="почта", phone="телефон",
+                   password="пароль", second_password="второй пароль", old_passwords="старые пароли",
+                   note="заметка", category="категория", color="цвет", entry_type="тип записи",
+                   allow_spaces="разрешение пробелов")
 
 
 def valid_additional(value):
@@ -78,21 +84,63 @@ def bulk_edit(doc, entry_ids, field, value):
         entry["updated_at"] = timestamp
 
 
-def suggestions(doc, field):
+def suggestion_sources(doc, field):
     if field not in SUGGESTION_FIELDS:
-        return []
+        return {}
+    hidden = set(doc["settings"].get("entry_input", {}).get("hidden", {}).get(field, []))
     values = {}
     for entry in doc["entries"].values():
         for value in [entry[field], *additional_fields(entry).get(field, [])]:
-            if not entry["deleted_at"] and value.strip():
-                values.setdefault(value.casefold(), value)
-    return sorted(values.values(), key=str.casefold)
+            key = value.lower()
+            if not entry["deleted_at"] and value and not value[-1].isspace() and key not in hidden:
+                values.setdefault(key, (value, entry))
+    return {value: entry for value, entry in sorted(values.values(), key=lambda item: item[0].casefold())}
+
+
+def suggestions(doc, field):
+    return list(suggestion_sources(doc, field))
+
+
+def hide_suggestion(doc, field, value):
+    hidden = doc["settings"].setdefault("entry_input", {}).setdefault("hidden", {}).setdefault(field, [])
+    if value.lower() not in hidden:
+        if len(hidden) >= 1000:
+            raise VaultError("Список скрытых подсказок для этого поля заполнен.")
+        hidden.append(value.lower())
+
+
+def space_fields(record):
+    if record.get("allow_spaces"):
+        return []
+    extra = record.get("additional_fields", {})
+    return [key for key in CREDENTIAL_FIELDS
+            if any(char.isspace() for value in (record.get(key, ""), *extra.get(key, [])) for char in value)]
+
+
+def space_problems(doc):
+    return [(key, entry["title"], fields) for key, entry in doc["entries"].items() if (fields := space_fields(entry))]
+
+
+def repair_spaces(doc):
+    def clean(value):
+        return "".join(char for char in value if not char.isspace())
+    for key, _, fields in space_problems(doc):
+        entry = doc["entries"][key]
+        if entry.get("entry_type") == "password" and not clean(entry["password"]):
+            continue
+        for field in fields:
+            if field in entry:
+                entry[field] = clean(entry[field])
+            if field in entry.get("additional_fields", {}):
+                entry["additional_fields"][field] = [clean(value) for value in entry["additional_fields"][field]]
+        entry["updated_at"] = now()
 
 
 def valid_fields(record, extra):
     """Accept legacy records without changing immutable causal register values."""
     required = (set(FIELDS) - OPTIONAL_FIELDS) | set(extra)
-    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type", "additional_fields", "color"}
+    return (isinstance(record, dict) and required <= set(record) <= required | OPTIONAL_FIELDS | {"entry_type", "additional_fields", "color", "allow_spaces"}
+            and ("allow_spaces" not in record or type(record["allow_spaces"]) is bool)
             and ("color" not in record or (isinstance(record["color"], str) and bool(re.fullmatch(r"#[0-9a-fA-F]{6}", record["color"]))))
             and valid_additional(record.get("additional_fields", {}))
             and record.get("entry_type", "account") in ("account", "password")
@@ -161,7 +209,7 @@ def validate(document):
             if str(uuid.UUID(eid)) != eid or datetime.fromisoformat(timestamp).tzinfo is None:
                 raise InvalidVault()
         settings = document["settings"]
-        if set(settings) - {"theme", "accent_color", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates", "vault_name"}:
+        if set(settings) - {"theme", "accent_color", "lock_minutes", "generator", "sync_minutes", "category_colors", "check_updates", "vault_name", "entry_input"}:
             raise InvalidVault()
         if "accent_color" in settings and (not isinstance(settings["accent_color"], str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", settings["accent_color"])):
             raise InvalidVault()
@@ -172,6 +220,15 @@ def validate(document):
             except VaultError:
                 raise InvalidVault() from None
         if "check_updates" in settings and type(settings["check_updates"]) is not bool:
+            raise InvalidVault()
+        input_settings = settings.get("entry_input", {})
+        if not isinstance(input_settings, dict) or set(input_settings) - {"check", "hidden"} or type(input_settings.get("check", True)) is not bool:
+            raise InvalidVault()
+        hidden = input_settings.get("hidden", {})
+        if not isinstance(hidden, dict) or set(hidden) - set(SUGGESTION_FIELDS) or any(
+            not isinstance(items, list) or len(items) > 1000 or any(not isinstance(item, str) or len(item) > 100_000 for item in items)
+            for items in hidden.values()
+        ):
             raise InvalidVault()
         colors = settings.get("category_colors", {})
         if not isinstance(colors, dict) or any(str(uuid.UUID(cid)) != cid or not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color) for cid, color in colors.items()):
@@ -214,7 +271,7 @@ def save_entry(doc, values, entry_id=None):
         values["title"] = password_title(values.get("note", ""))
     if not isinstance(values.get("title"), str) or not values["title"].strip():
         raise VaultError("Укажите название записи.")
-    if set(values) - (set(FIELDS) | {"category", "entry_type", "additional_fields", "color"}):
+    if set(values) - (set(FIELDS) | {"category", "entry_type", "additional_fields", "color", "allow_spaces"}):
         raise VaultError("Неизвестные поля записи.")
     if any(not isinstance(values.get(f, ""), str) or len(values.get(f, "")) > 100_000 for f in FIELDS):
         raise VaultError("Недопустимые поля записи.")
@@ -233,6 +290,8 @@ def save_entry(doc, values, entry_id=None):
     record.update(id=entry_id, category=category, deleted_at=None, updated_at=now())
     if "entry_type" in values:
         record["entry_type"] = values["entry_type"]
+    if values.get("allow_spaces") is True:
+        record["allow_spaces"] = True
     if not valid_fields(record, {"id", "category", "deleted_at", "updated_at"}):
         raise VaultError("Недопустимые поля записи.")
     doc["entries"][entry_id] = record
@@ -385,3 +444,32 @@ def backup_diff(current, previous):
     return {"added": len(b.keys() - a.keys()), "removed": len(a.keys() - b.keys()),
             "changed": sum(a[k] != b[k] for k in a.keys() & b.keys()),
             "categories_changed": current["categories"] != previous["categories"]}
+
+
+def entry_changes(before, after):
+    changes = []
+    old, new = before["entries"], after["entries"]
+    for key in old.keys() | new.keys() | after["tombstones"].keys():
+        a, b = old.get(key), new.get(key)
+        fields = []
+        if b is None:
+            if a or key not in before["tombstones"]:
+                fields.append("Удалена окончательно" if key in after["tombstones"] else "Отсутствует в версии")
+        elif a is None:
+            fields.append("Добавлена в корзину" if b["deleted_at"] else "Добавлена")
+        else:
+            if bool(a["deleted_at"]) != bool(b["deleted_at"]):
+                fields.append("В корзине" if b["deleted_at"] else "Восстановлена из корзины")
+            extra_a, extra_b = additional_fields(a), additional_fields(b)
+            for name, label in FIELD_NAMES.items():
+                if a.get(name, "") != b.get(name, "") or extra_a.get(name, []) != extra_b.get(name, []):
+                    fields.append("Изменено поле «" + label + "»")
+            if a["category"] == b["category"] and a["category"] and category_path(before, a["category"]) != category_path(after, b["category"]):
+                fields.append("Изменён путь категории")
+        if fields:
+            changes.append((key, (b or a or {}).get("title", key), fields))
+    return sorted(changes, key=lambda row: (row[1].casefold(), row[0]))
+
+
+def describe_changes(before, after):
+    return "\n".join(f"{title} — {', '.join(fields)}" for _, title, fields in entry_changes(before, after)) or "Изменившихся записей нет."

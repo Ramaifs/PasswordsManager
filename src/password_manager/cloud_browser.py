@@ -82,9 +82,14 @@ class CloudPreviewDialog(QDialog):
         layout.addWidget(QLabel(display_time(copy)))
         layout.addWidget(QLabel("Просмотр копии · изменения доступны после переключения"))
         self.entries = QListWidget()
-        self.records = sorted(document["entries"].values(), key=lambda entry: entry["title"].casefold())
-        for entry in self.records:
-            self.entries.addItem(entry["title"] + (" · В корзине" if entry["deleted_at"] else ""))
+        self.compare = QCheckBox("Показать только различия с открытым хранилищем")
+        session = window.session
+        if session.unlocked and session.access.header["vault_id"] == access.header["vault_id"]:
+            layout.addWidget(self.compare)
+        else:
+            self.compare.hide()
+        self.comparison_empty = QLabel("Изменившихся записей нет.")
+        layout.addWidget(self.comparison_empty)
         layout.addWidget(self.entries, 1)
         self.details = QTextEdit()
         self.details.setReadOnly(True)
@@ -104,11 +109,30 @@ class CloudPreviewDialog(QDialog):
         for button in (export, switch, close):
             controls.addWidget(button)
         layout.addLayout(controls)
-        if self.records:
-            self.entries.setCurrentRow(0)
+        self.compare.toggled.connect(self.populate_entries)
+        self.populate_entries()
         self.idle_timer = QTimer(self)
         self.idle_timer.timeout.connect(self.check_idle)
         self.idle_timer.start(1000)
+
+    def populate_entries(self):
+        self.entries.blockSignals(True)
+        self.entries.clear()
+        if self.compare.isChecked():
+            changes = model.entry_changes(self.window.session.document, self.document)
+            self.records = [self.document["entries"].get(key) for key, _, _ in changes]
+            for _, name, fields in changes:
+                self.entries.addItem(name + " — " + ", ".join(fields))
+        else:
+            self.records = sorted(self.document["entries"].values(), key=lambda entry: entry["title"].casefold())
+            for entry in self.records:
+                self.entries.addItem(entry["title"] + (" · В корзине" if entry["deleted_at"] else ""))
+        self.comparison_empty.setVisible(self.compare.isChecked() and not self.records)
+        self.entries.blockSignals(False)
+        if self.records:
+            self.entries.setCurrentRow(0)
+        else:
+            self.details.clear()
 
     def check_idle(self):
         if self.document and time.monotonic() - self.window.last_activity >= self.document["settings"]["lock_minutes"] * 60:
@@ -120,6 +144,9 @@ class CloudPreviewDialog(QDialog):
             self.details.clear()
             return
         entry = self.records[index]
+        if entry is None:
+            self.details.clear()
+            return
         labels = [("title", "Название"), ("site", "Сайт"), ("username", "Логин"), ("email", "Почта"), ("phone", "Телефон"), ("password", "Пароль"), ("second_password", "Второй пароль (2FA)"), ("old_passwords", "Старые пароли"), ("note", "Заметка")]
         labels = dict((field, label) for field, label in labels if field != "old_passwords")
         lines = [label + ": " + ("••••••" if field in model.SECRET_FIELDS and not self.reveal.isChecked() else value) for field, label, value in model.display_fields(entry, labels)]

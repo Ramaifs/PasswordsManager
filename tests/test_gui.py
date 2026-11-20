@@ -19,6 +19,8 @@ def test_other_passwords_editor_only_has_password_and_note_and_reopens(window):
     visible = [key for key, widget in window.fields.items() if not window.field_groups[widget][0].isHidden()]
     assert visible == ['password', 'note']
     assert window.field_groups[window.record_category][0].isHidden()
+    window.advanced.click()
+    window.allow_spaces.setChecked(True)
     window.fields['password'].setText('Other password fixture')
     window.fields['note'].setPlainText('Door lock')
     assert window.editor_heading.text() == 'Door lock'
@@ -26,6 +28,7 @@ def test_other_passwords_editor_only_has_password_and_note_and_reopens(window):
     eid = window.selected_id
     record = window.session.store.open(PASSWORD)[1]['entries'][eid]
     assert record['entry_type'] == 'password' and record['title'] == 'Door lock'
+    assert record['allow_spaces'] is True
     window.refresh_entries()
     assert window.entries.count() == 1
     window.entries.setCurrentRow(0)
@@ -262,6 +265,10 @@ def test_bulk_clipboard_and_additional_draft_reopen(window, monkeypatch):
     other = next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == 'other-passwords')
     window.categories.setCurrentItem(other)
     QApplication.clipboard().setText(' fixture-one \nfixture-two\r\nfixture-three')
+    from password_manager.errors import VaultError
+    with pytest.raises(VaultError):
+        window.paste_other_passwords()
+    QApplication.clipboard().setText('fixture-one\nfixture-two\r\nfixture-three')
     window.paste_button.click()
     assert window.entries.count() == 3
     assert window.session.store.open(PASSWORD)[1]['entries'] == window.session.document['entries']

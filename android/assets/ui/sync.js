@@ -1,6 +1,7 @@
 import { normalizeParents } from './categories.js';
 // PMVAULT sync protocol 1. Keys stay in vault-worker; no wall-clock winner.
 import { canonical, newDocument, validateDocument, encodeVault, decodePayload, inspect, b64, unb64 } from './core.js';
+import { entryChanges } from './entry-review.js';
 const text = value => new TextDecoder().decode(canonical(value));
 const clone = value => structuredClone(value);
 const same = (a, b) => text(a) === text(b);
@@ -126,13 +127,13 @@ export async function prepare(access, document, actor, remote) {
 }
 export async function previewChanges(access, document, actor, remote) {
   const { doc } = await mergeRemote(access, document, actor, remote);
-  const active = value => new Map(Object.entries(value.entries).filter(([, entry]) => !entry.deleted_at));
-  const before = active(document), after = active(doc);
-  return {
-    added: [...after].filter(([id]) => !before.has(id)).map(([, entry]) => entry.title),
-    removed: [...before].filter(([id]) => !after.has(id)).map(([, entry]) => entry.title),
-    changed: [...after].filter(([id, entry]) => before.has(id) && !same(before.get(id), entry)).map(([, entry]) => entry.title)
-  };
+  return entryChanges(document, doc);
+}
+export async function openWireCopy(access, blob, version) {
+  const value = await payload(access, blob, version);
+  const doc = newDocument();
+  doc.sync = { state: value.state, pending: null, published: null, seen: {} };
+  return project(doc, value.state);
 }
 export async function acknowledge(access, document, id, blob) {
   const doc = clone(document), pending = doc.sync?.pending;
