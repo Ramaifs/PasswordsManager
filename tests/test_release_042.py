@@ -34,13 +34,13 @@ def test_remote_check_prompts_before_applying_and_decline_blocks_auto_sync(windo
     monkeypatch.setattr(cloud, '_start', lambda operation, callback: callback(operation()))
     applied = []
     monkeypatch.setattr(cloud, '_received', lambda transport, values: applied.append(values))
-    monkeypatch.setattr(QMessageBox, 'question', lambda *a: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(cloud, 'confirm_remote_changes', lambda remote: False)
     before = window.session.document.copy()
     cloud.check_remote_changes()
     assert window.session.document == before and not applied
     monkeypatch.setattr(cloud, 'sync', lambda: pytest.fail('Declined cloud version auto applied'))
     cloud.auto_sync()
-    monkeypatch.setattr(QMessageBox, 'question', lambda *a: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(cloud, 'confirm_remote_changes', lambda remote: True)
     cloud.check_remote_changes()
     assert applied == [remote]
 
@@ -51,7 +51,7 @@ def test_seen_remote_versions_do_not_prompt(window, monkeypatch):
     window.session.document['sync'] = {'seen': {'known': {'digest': digest(b'ciphertext')}}}
     monkeypatch.setattr(cloud, 'transport_factory', lambda *a: SimpleNamespace(fetch=lambda: {'known': b'ciphertext'}))
     monkeypatch.setattr(cloud, '_start', lambda operation, callback: callback(operation()))
-    monkeypatch.setattr(QMessageBox, 'question', lambda *a: pytest.fail('Known version prompted'))
+    monkeypatch.setattr(cloud, 'confirm_remote_changes', lambda remote: pytest.fail('Known version prompted'))
     cloud.check_remote_changes()
 
 

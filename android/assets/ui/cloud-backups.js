@@ -33,7 +33,20 @@ export function groupCopies(copies, lastVault) {
   const latest = ordered.find(copy => lastVault && copy.vaultId === lastVault) || null;
   return { latest, others: ordered.filter(copy => copy.id !== latest?.id) };
 }
-export function displayTime(copy) {
+const weekdays = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const months = ['янв.', 'февр.', 'мар.', 'апр.', 'мая', 'июн.', 'июл.', 'авг.', 'сент.', 'окт.', 'нояб.', 'дек.'];
+export function displayTime(copy, seconds = false) {
   const time = backupTime(copy);
-  return time === -Infinity ? 'Время неизвестно' : new Date(time).toISOString().slice(0, 19).replace('T', ' ') + ' UTC';
+  if (time === -Infinity) return 'Время неизвестно';
+  const date = new Date(time);
+  const clock = date.toISOString().slice(11, seconds ? 19 : 16);
+  return weekdays[date.getUTCDay()] + ', ' + date.getUTCDate() + ' ' + months[date.getUTCMonth()] + ' ' + date.getUTCFullYear() + ', ' + clock + ' UTC';
+}
+export function copyTimes(copies) {
+  const groups = new Map();
+  for (const copy of copies) {
+    const minute = Math.floor(backupTime(copy) / 60000);
+    groups.set(minute, (groups.get(minute) || 0) + 1);
+  }
+  return new Map(copies.map(copy => [copy.id, displayTime(copy, groups.get(Math.floor(backupTime(copy) / 60000)) > 1)]));
 }

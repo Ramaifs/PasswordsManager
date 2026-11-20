@@ -41,6 +41,9 @@ self.onmessage = async ({ data }) => {
     if (operation === 'encode') {
       self.postMessage({ id, result: { blob: await core.encodeVault(session.access, session.document), document: session.document } }); return;
     }
+    if (operation === 'sync-preview') {
+      self.postMessage({ id, result: await sync.previewChanges(session.access, session.document, session.actor, args.remote) }); return;
+    }
     if (operation === 'update') {
       const next = structuredClone(args.document);
       core.trackChanges(session.document, next, session.actor);

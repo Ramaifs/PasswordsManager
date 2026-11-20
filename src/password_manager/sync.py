@@ -150,6 +150,28 @@ class SyncEngine:
         self._save(doc)
         return deepcopy(metadata["pending"])
 
+    def preview_changes(self, remote):
+        """Project incoming versions in memory without altering the saved vault."""
+        self._require()
+        doc = deepcopy(self.session.document)
+        access = self.session.access
+        if doc["sync"] is None:
+            doc["sync"] = {"state": sync_state.seed(doc, self.session.actor),
+                           "pending": None, "published": None, "seen": {}}
+        state = doc["sync"]["state"]
+        for version, blob in remote.items():
+            if doc["sync"]["seen"].get(version, {}).get("digest") == digest(blob):
+                continue
+            state = sync_state.merge(state, version_payload(blob, access, version)["state"])
+        incoming = sync_state.project(doc, state)
+        before = {key: entry for key, entry in doc["entries"].items() if not entry["deleted_at"]}
+        after = {key: entry for key, entry in incoming["entries"].items() if not entry["deleted_at"]}
+        return {
+            "Добавлены": sorted((after[key]["title"] for key in after.keys() - before.keys()), key=str.casefold),
+            "Удалены": sorted((before[key]["title"] for key in before.keys() - after.keys()), key=str.casefold),
+            "Изменены": sorted((after[key]["title"] for key in after.keys() & before.keys() if after[key] != before[key]), key=str.casefold),
+        }
+
     def _preserve(self, blob):
         from .storage import write_fsynced
         folder = self.session.store.root / "sync-blocked"

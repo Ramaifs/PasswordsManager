@@ -513,13 +513,15 @@ def test_sidebar_context_actions_and_nested_categories(window):
     child = window.session.mutate(lambda doc: model.category(doc, 'Mail', parent_id=root))
     window.refresh_categories()
     assert window.categories.item(5).data(__import__('PySide6').QtCore.Qt.ItemDataRole.UserRole) == child
-    assert '• ' in window.categories.item(5).text()
+    from password_manager.category_list import CATEGORY_DEPTH
+    assert window.categories.item(5).data(CATEGORY_DEPTH) == 1
+    assert not window.categories.item(5).icon().isNull()
     assert [action.text() for action in window.category_menu().actions()] == ['Создать категорию']
     labels = [action.text() for action in window.category_menu(root).actions()]
     assert all(label in labels for label in ['Создать подкатегорию','Переименовать','Поменять цвет','Удалить категорию'])
     sidebar = window.categories.parentWidget()
     buttons = [button.text() for button in sidebar.findChildren(QPushButton)]
-    assert buttons == ['Настройки']
+    assert buttons == ['Настройки', 'Генератор паролей']
     assert [b.objectName() for b in sidebar.findChildren(QToolButton)] == ['themeToggle']
 
 
@@ -559,7 +561,10 @@ def test_category_arrow_click_drag_drop_and_root_move(window):
     QApplication.processEvents()
     def item(cid):
         return next(window.categories.item(i) for i in range(window.categories.count()) if window.categories.item(i).data(Qt.ItemDataRole.UserRole) == cid)
-    assert '• ' in item(b).text() and '> ' not in item(b).text()
+    from password_manager.category_list import CATEGORY_DEPTH
+    assert item(b).data(CATEGORY_DEPTH) == 1
+    assert item(b).text() == 'Mail'
+    assert not item(b).icon().isNull()
     rect = window.categories.visualItemRect(item(a))
     QTest.mouseClick(window.categories.viewport(), Qt.MouseButton.LeftButton, pos=rect.topRight() + __import__('PySide6').QtCore.QPoint(-18, rect.height() // 2))
     assert item(b).isHidden() and a in window.collapsed_categories

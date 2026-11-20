@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QListWidget, QStyledItemDelegate, QAbstractItemVie
 MIME = "application/x-password-manager-category"
 HAS_CHILDREN = int(Qt.ItemDataRole.UserRole) + 1
 COLLAPSED = int(Qt.ItemDataRole.UserRole) + 2
+CATEGORY_DEPTH = int(Qt.ItemDataRole.UserRole) + 3
 
 
 class CategoryDelegate(QStyledItemDelegate):
@@ -15,6 +16,9 @@ class CategoryDelegate(QStyledItemDelegate):
 
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
+        depth = index.data(CATEGORY_DEPTH) or 0
+        if depth:
+            option.decorationSize = QSize(option.decorationSize.width() + depth * 3, option.decorationSize.height())
         if index.data(HAS_CHILDREN) and option.rect.width() > 0:
             option.text = option.fontMetrics.elidedText(option.text, Qt.TextElideMode.ElideRight, max(0, option.rect.width() - 62))
 

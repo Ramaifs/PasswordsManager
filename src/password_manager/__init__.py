@@ -1,3 +1,3 @@
 """Personal password manager. No logging of vault contents."""
 
-__version__ = "0.42.5"
+__version__ = "0.43.0"

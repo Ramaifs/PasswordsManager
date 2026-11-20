@@ -19,6 +19,7 @@ import javax.crypto.spec.GCMParameterSpec;
 /** Offline packaged interface. Vault keys never cross the JavaScript storage bridge. */
 public final class MainActivity extends Activity {
  private static final String ORIGIN="https://appassets.androidplatform.net", SERVICE="https://password-manager-vault.masaoyhs.workers.dev";
+ private static final String RELEASES = "https://github.com/Ramaifs/PasswordsManager/releases";
  private WebView web; private boolean ready; private ValueCallback<Uri[]> chooser; private byte[] exporting;
  private final ExecutorService network=Executors.newSingleThreadExecutor();
  @Override public void onCreate(Bundle saved) {
@@ -156,17 +157,34 @@ public final class MainActivity extends Activity {
    connection.disconnect();
   }
  }
+ private JSONObject latestRelease() throws AuthFailure {
+  HttpURLConnection connection = null;
+  try {
+   connection = (HttpURLConnection) new URL(RELEASES + "/latest/download/manifest.json").openConnection();
+   connection.setConnectTimeout(10000);
+   connection.setReadTimeout(10000);
+   if (connection.getResponseCode() != 200 || !"https".equals(connection.getURL().getProtocol())) throw new IOException();
+   JSONObject manifest = new JSONObject(new String(read(connection.getInputStream(), 32768), StandardCharsets.UTF_8));
+   String version = manifest.getString("version");
+   if (!version.matches("[0-9]{1,4}\\.[0-9]{1,4}(\\.[0-9]{1,4})?")) throw new IOException();
+   return new JSONObject().put("version", version);
+  } catch (IOException | JSONException error) {
+   throw new AuthFailure("update_check", "Не удалось проверить обновления на GitHub.");
+  } finally {
+   if (connection != null) connection.disconnect();
+  }
+ }
  private final class Bridge{
   @JavascriptInterface public synchronized String readVaults(){try{File f=new File(getFilesDir(),"vaults.json");return f.exists()?new String(read(new AtomicFile(f).openRead(),64*1024*1024),StandardCharsets.UTF_8):"[]";}catch(Exception e){return "{\"error\":\"Не удалось прочитать сохранение. Исходные данные не перезаписаны.\"}";}}
   @JavascriptInterface public synchronized String writeVaults(String encrypted){try{byte[] bytes=encrypted.getBytes(StandardCharsets.UTF_8);if(bytes.length>64*1024*1024)throw new IOException();new JSONArray(encrypted);atomic("vaults.json",bytes);return "{}";}catch(Exception e){return "{\"error\":\"Не удалось сохранить хранилище. Освободите место и повторите.\"}";}}
   @JavascriptInterface public void authRequest(String id, String path, String body) {
    if (!id.matches("[0-9a-f-]{36}") || body.length() > 4096) return;
-   if (!path.equals("pair") && !path.equals("token") && !path.equals("logout")) return;
+   if (!path.equals("pair") && !path.equals("token") && !path.equals("logout") && !path.equals("release")) return;
    network.execute(() -> {
     JSONObject result = new JSONObject();
     try {
      try {
-      result.put("value", auth(path, body));
+      result.put("value", path.equals("release") ? latestRelease() : auth(path, body));
      } catch (AuthFailure error) {
       result.put("error", error.getMessage()).put("code", error.code);
      } catch (Exception error) {
@@ -193,7 +211,8 @@ public final class MainActivity extends Activity {
        description = "Не удалось подключиться к серверу Google Drive";
       }
       result.put("error", description + " [" + step + "-" + kind + "].");
-      if (kind.equals("TIMEOUT") || kind.equals("SOCKET")) result.put("code", "transport_retry");
+      if (kind.equals("DNS")) result.put("code", "transport_dns");
+      else if (kind.equals("TIMEOUT") || kind.equals("SOCKET")) result.put("code", "transport_retry");
      }
     } catch (JSONException ignored) {
      return;
@@ -203,6 +222,12 @@ public final class MainActivity extends Activity {
    });
   }
   @JavascriptInterface public boolean hasSession(){return new File(getFilesDir(),"google-session.json").exists();}
+  @JavascriptInterface public void openReleases() {
+   runOnUiThread(() -> {
+    try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES))); }
+    catch (ActivityNotFoundException error) { new AlertDialog.Builder(MainActivity.this).setMessage("Для просмотра версий нужен браузер.").setPositiveButton("OK", null).show(); }
+   });
+  }
   @JavascriptInterface public void connect(String state,String challenge){if(!state.matches("[A-Za-z0-9_-]{43}")||!challenge.matches("[A-Za-z0-9_-]{43}"))return;runOnUiThread(()->{try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(SERVICE+"/api/android/connect?state="+state+"&challenge="+challenge)));}catch(Exception e){new AlertDialog.Builder(MainActivity.this).setMessage("Для подключения Google нужен системный браузер.").setPositiveButton("OK",null).show();}});}
   @JavascriptInterface public void exportFile(String encoded,String name){if(encoded.length()>24*1024*1024)return;byte[] bytes=Base64.decode(encoded,Base64.DEFAULT);runOnUiThread(()->{if(exporting!=null)return;exporting=bytes;startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).setType("application/octet-stream").addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_TITLE,name.replaceAll("[/\\\\]","_")),11);});}
   @JavascriptInterface public void copyText(String text){((ClipboardManager)getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Password Manager",text));}

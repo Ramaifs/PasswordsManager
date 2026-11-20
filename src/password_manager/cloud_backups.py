@@ -1,4 +1,5 @@
 """Ordering and grouping of encrypted Google Drive copies."""
+from collections import Counter
 from datetime import datetime, timezone
 import re
 
@@ -30,6 +31,20 @@ def group_copies(copies, last_vault=None):
     return latest, [copy for copy in ordered if latest is None or copy["id"] != latest["id"]]
 
 
-def display_time(copy):
+WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
+MONTHS = ("янв.", "февр.", "мар.", "апр.", "мая", "июн.", "июл.", "авг.", "сент.", "окт.", "нояб.", "дек.")
+
+
+def display_time(copy, seconds=False):
     stamp = backup_time(copy)
-    return "Время неизвестно" if stamp == float("-inf") else datetime.fromtimestamp(stamp, timezone.utc).strftime("%d.%m.%Y %H:%M:%S UTC")
+    if stamp == float("-inf"):
+        return "Время неизвестно"
+    date = datetime.fromtimestamp(stamp, timezone.utc)
+    clock = date.strftime("%H:%M:%S" if seconds else "%H:%M")
+    return f"{WEEKDAYS[date.weekday()]}, {date.day} {MONTHS[date.month - 1]} {date.year}, {clock} UTC"
+
+
+def copy_times(copies):
+    minutes = {copy["id"]: backup_time(copy) // 60 for copy in copies}
+    counts = Counter(minutes.values())
+    return {copy["id"]: display_time(copy, counts[minutes[copy["id"]]] > 1) for copy in copies}

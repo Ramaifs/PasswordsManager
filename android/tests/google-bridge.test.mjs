@@ -60,3 +60,24 @@ test('a temporary network interruption during pairing retries without reopening 
  assert.equal(browserOpens,1);
  assert.equal(pairRequests,2);
 });
+
+test('an Android DNS failure during pairing can recover within the same Google sign-in', async () => {
+ let browserOpens = 0;
+ let pairBody;
+ AndroidVault.connect = () => { browserOpens++; };
+ AndroidVault.authRequest = (id, path, body) => {
+  let result;
+  if (path === 'token') result = {value:{access_token:'RECOVERED',expires_in:3600}};
+  else if (pairBody === undefined) {
+   pairBody = body;
+   result = {error:'Не удалось найти сервер подключения Google Drive [PAIR-DNS].',code:'transport_dns'};
+  } else {
+   assert.equal(body,pairBody);
+   result = {value:{paired:true}};
+  }
+  queueMicrotask(() => window.pmAuthResult(id,result));
+ };
+ const client = await import('../assets/ui/google.js?pair-dns');
+ assert.equal(await client.authorize(),'RECOVERED');
+ assert.equal(browserOpens,1);
+});

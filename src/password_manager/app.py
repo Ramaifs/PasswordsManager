@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QDialogButtonBox, QTableWidget, QTableWidgetItem, QHeaderView, QScrollArea, QToolButton, QMenu, QGridLayout,
     QSizePolicy, QColorDialog, QFrame, QSystemTrayIcon, QCompleter, QAbstractItemView)
 from .theme import stylesheet
-from .category_list import CategoryList, HAS_CHILDREN, COLLAPSED
+from .category_list import CategoryList, HAS_CHILDREN, COLLAPSED, CATEGORY_DEPTH
 from .icons import application_icon, navigation_icon, entry_icon
 from .preferences import Preferences
 
@@ -460,7 +460,8 @@ class Window(QMainWindow):
         self.categories.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.categories.customContextMenuRequested.connect(self.category_context_menu)
         ll.addWidget(self.categories)
-        button("Настройки", lambda: self.safe(self.settings), ll)
+        self.settings_button = button("Настройки", lambda: self.safe(self.settings), ll)
+        self.generator_button = button("Генератор паролей", lambda: self.safe(self.generator_dialog), ll)
         self.theme_button = QToolButton()
         self.theme_button.setObjectName("themeToggle")
         self.theme_button.setAccessibleName("Переключить тему")
@@ -815,7 +816,8 @@ class Window(QMainWindow):
         for cid, name, depth in rows:
             if parents.get(cid) in self.collapsed_categories or parents.get(cid) in hidden:
                 hidden.add(cid)
-        for name, data in [("Все записи", "all"), ("Без категории", None), ("Прочие пароли", "other-passwords"), *[(('    ' * depth + '• ' if depth else '') + name, cid) for cid, name, depth in rows], ("Корзина", "trash")]:
+        depths = {cid: depth for cid, _, depth in rows}
+        for name, data in [("Все пароли", "all"), ("Без категории", None), ("Прочие пароли", "other-passwords"), *[(name, cid) for cid, name, _ in rows], ("Корзина", "trash")]:
             if self.categories.count() == 3:
                 heading = QListWidgetItem("Категории")
                 heading.setData(Qt.ItemDataRole.UserRole, "category-heading")
@@ -827,7 +829,11 @@ class Window(QMainWindow):
             if data in ("all", None, "other-passwords", "trash"):
                 item.setIcon(navigation_icon({"all": "key", None: "folder", "other-passwords": "asterisk", "trash": "trash"}[data], icon_color))
             if data in self.session.document["categories"]:
-                item.setForeground(QColor(self.session.document["settings"].get("category_colors", {}).get(data, self.session.document["settings"].get("accent_color", "#8864cb"))))
+                depth = depths[data]
+                color = self.session.document["settings"].get("category_colors", {}).get(data, self.session.document["settings"].get("accent_color", "#8864cb"))
+                item.setForeground(QColor(color))
+                item.setData(CATEGORY_DEPTH, depth)
+                item.setIcon(navigation_icon("subfolder" if depth else "folder", color, depth))
                 item.setData(HAS_CHILDREN, data in has_children)
                 item.setData(COLLAPSED, data in self.collapsed_categories)
                 item.setToolTip(model.category_path(self.session.document, data))
@@ -957,6 +963,8 @@ class Window(QMainWindow):
         self.empty_trash_button.setVisible(category == "trash")
         self.empty_trash_button.setEnabled(any(e["deleted_at"] for e in self.session.document["entries"].values()))
         entries = model.search(self.session.document, self.query.text(), "all" if category == "trash" else category, category == "trash")
+        if category == "all":
+            entries = [entry for entry in entries if entry.get("entry_type") != "password"]
         collator = QCollator(QLocale("ru_RU"))
         collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         entries.sort(key=lambda entry: (collator.sortKey(entry["title"]), entry["id"]))
@@ -1695,6 +1703,9 @@ class Window(QMainWindow):
         self.setStyleSheet(stylesheet(dark, self.session.document["settings"].get("accent_color", "#8864cb")))
         self.theme_button.setIcon(navigation_icon("sun" if dark else "moon", "#a09cb0" if dark else "#706a7c"))
         muted = "#a09cb0" if dark else "#706a7c"
+        self.settings_button.setIcon(navigation_icon("settings", muted))
+        self.generator_button.setIcon(navigation_icon("generator", muted))
+        self.generate_button.setIcon(navigation_icon("generator", muted))
         for index in range(self.categories.count()):
             item = self.categories.item(index)
             kind = item.data(Qt.ItemDataRole.UserRole)

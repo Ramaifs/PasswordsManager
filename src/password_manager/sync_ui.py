@@ -2,7 +2,7 @@
 from threading import Event
 from time import monotonic
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QInputDialog, QDialog
 
 from .crypto import unb64
@@ -123,16 +123,34 @@ class SyncUI(QObject):
             changed = any(seen.get(version, {}).get("digest") != digest(blob) for version, blob in remote.items())
             if not changed:
                 return
-            if self.window.dirty:
+            if self.window.dirty or QApplication.activeModalWidget() is not None:
                 self.request_remote_check()
                 return
-            answer = QMessageBox.question(self.window, "Облачная версия обновлена", "На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены; конфликтующие варианты сохранятся для выбора.")
-            if answer == QMessageBox.StandardButton.Yes:
+            if self.confirm_remote_changes(remote):
                 self._received(transport, remote)
             else:
                 # Do not silently consume the declined version through auto sync.
                 self.remote_check_pending = True
         self._start(transport.fetch, received)
+
+    def confirm_remote_changes(self, remote):
+        dialog = QMessageBox(self.window)
+        dialog.setWindowTitle("Облачная версия обновлена")
+        dialog.setTextFormat(Qt.TextFormat.PlainText)
+        dialog.setText("На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены, конфликтующие варианты сохранятся для выбора.")
+        try:
+            changes = SyncEngine(self.window.session).preview_changes(remote)
+            details = "\n\n".join(f"{label} ({len(titles)})\n" + ("\n".join(titles) or "Нет записей") for label, titles in changes.items())
+        except VaultError:
+            details = "Не удалось прочитать сводку этой облачной версии."
+        dialog.setDetailedText(details)
+        for control in dialog.buttons():
+            if dialog.buttonRole(control) == QMessageBox.ButtonRole.ActionRole:
+                control.setText("Дополнительно")
+        apply = dialog.addButton("Использовать облачную версию", QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton("Позже", QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+        return dialog.clickedButton() == apply
 
     def auto_sync(self):
         if self.remote_check_pending:
@@ -204,6 +222,7 @@ class SyncUI(QObject):
         client = config(path)
         self.cancel = Event()
         self.set_status("Ожидание разрешения Google в системном браузере…")
+        self.window.toast("Подключение..", persistent=True)
         def connected(value):
             self.connection.save(value)
             self.set_status("Google подключён")
@@ -352,5 +371,4 @@ class SyncUI(QObject):
 
     def refresh_view(self):
         self.window.refresh_categories()
-        self.window.clear_editor()
         self.window.refresh_entries()

@@ -53,6 +53,22 @@ def align(sessions, drive):
             SyncEngine(s).exchange(drive)
 
 
+def test_cloud_preview_names_added_removed_and_changed_entries_without_writing(clients):
+    (a, b, _), existing = clients
+    drive = MemoryDrive()
+    removed = a.mutate(lambda doc: model.save_entry(doc, {"title": "removed"}))
+    align([a, b], drive)
+    b.mutate(lambda doc: model.save_entry(doc, {"title": "added", "password": "FICTIONAL-SECRET"}))
+    b.mutate(lambda doc: model.save_entry(doc, {"title": "changed"}, existing))
+    b.mutate(lambda doc: model.trash(doc, removed))
+    SyncEngine(b).exchange(drive)
+    before = deepcopy(a.document)
+    assert SyncEngine(a).preview_changes(drive.fetch()) == {
+        "Добавлены": ["added"], "Удалены": ["removed"], "Изменены": ["changed"]
+    }
+    assert a.document == before
+
+
 def test_two_clients_independent_edits_and_local_only_fields(clients):
     (a, b, _), eid = clients
     drive = MemoryDrive()

@@ -8,12 +8,12 @@ import { FIELDS, passwordTitle, defaultGenerator, generate, inspect, validatePas
 import { listVaults, getVault, putVault, forgetVault, saveSnapshot } from './storage.js';
 import { legacyVaults, removeLegacy } from './legacy.js';
 import { DriveTransport } from './drive.js';
-import { loadGoogle, authorize, accessToken, connected, cancelGoogleLogin, initializeGoogleSession, ensureAccessToken, disconnectGoogle, persistentSessionEnabled } from './google.js';
+import { loadGoogle, authorize, accessToken, connected, cancelGoogleLogin, initializeGoogleSession, ensureAccessToken, disconnectGoogle, persistentSessionEnabled, latestAndroidRelease } from './google.js';
 import { GOOGLE_WEB_CLIENT_ID } from './oauth-config.js';
 import { vaultName } from './vault-names.js';
 import { SyncSchedule, syncMinutes } from './sync-schedule.js';
 import { conflicts } from './sync.js';
-import { groupCopies, displayTime, lastOpenedVault, rememberOpenedVault } from './cloud-backups.js';
+import { groupCopies, copyTimes, lastOpenedVault, rememberOpenedVault } from './cloud-backups.js';
 
 const app = document.querySelector('#app'), modal = document.querySelector('#modal');
 const iconPaths = {
@@ -28,16 +28,39 @@ const iconPaths = {
   check: '<path d="m5 12 4 4L19 6"/>', copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>', eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>', key: '<circle cx="8" cy="15" r="5"/><path d="m12 11 8-8m-3 3 3 3m-6 0 3 3"/>',
-  trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>', settings: '<path d="m9 3-1 3-3 1 1 4-2 2 2 3 3 1 1 4h4l1-4 3-1 2-3-2-2 1-4-3-1-1-3z"/><circle cx="12" cy="12" r="3"/>',
-  dice: '<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M7 7h.01M17 7h.01M12 12h.01M7 17h.01M17 17h.01"/>',
+  trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/>', settings: '<path fill="currentColor" fill-rule="evenodd" stroke="none" d="M9 2h6l.6 3.3 2.1 1.2 3.2-1.1 3 5.2-2.6 2.2v2.4l2.6 2.2-3 5.2-3.2-1.1-2.1 1.2-.6 3.3H9l-.6-3.3-2.1-1.2-3.2 1.1-3-5.2 2.6-2.2v-2.4L.1 10.6l3-5.2 3.2 1.1 2.1-1.2ZM12 10a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" transform="translate(2 0) scale(.83)"/>',
+  generator: '<path d="M4 7H2v10h2m16-10h2v10h-2M7 10v4m-1.7-3 3.4 2m-3.4 0 3.4-2m3.3-1v4m-1.7-3 3.4 2m-3.4 0 3.4-2m3.3-1v4m-1.7-3 3.4 2m-3.4 0 3.4-2"/>', subfolder: '<path d="M4 10V5h6l3 3h7v2M2 12h20l-2 8H4z"/>',
   chevron: '<path d="m8 9 4-4 4 4m-8 6 4 4 4-4"/>', clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>', cloud: '<path d="M6 18a5 5 0 1 1 1-10 6 6 0 0 1 11 2 4 4 0 0 1 0 8z"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>', restore: '<path d="M3 10a9 9 0 1 1 1 8M3 3v7h7M12 7v5l4 2"/>'
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${iconPaths[name] || iconPaths.vault}</svg>`;
+const categoryDots = depth => depth ? '<span class="category-prefix" aria-hidden="true">' + '•'.repeat(depth) + '</span>' : '';
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const now = () => new Date().toISOString();
 const clone = value => structuredClone(value);
 const state = { view: 'home', recent: [], record: null, token: null, doc: null, create: null, selected: null, category: 'all', entrySort: savedEntryOrder(), query: '', dirty: false, busy: false, generation: 0 };
 let worker, calls = new Map(), toastTimer, clipTimer, copiedPassword, lastActivity = Date.now();
+const APP_VERSION = '0.43.0';
+let updateChecked = false, updateRequest;
+async function checkUpdates(manual = false) {
+  if (updateRequest || (!manual && updateChecked)) return;
+  updateChecked = true;
+  try {
+    updateRequest = latestAndroidRelease();
+    const { version } = await updateRequest;
+    const current = APP_VERSION.split('.').map(Number), candidate = version.split('.').map(Number);
+    const difference = current.map((part, index) => (candidate[index] || 0) - part).find(delta => delta !== 0);
+    if (difference > 0) toast('Доступна версия ' + version + '. Откройте «Версии приложения» в настройках.');
+    else if (manual) toast('Установлена актуальная версия.');
+  } catch (failure) {
+    if (manual) throw failure;
+  } finally { updateRequest = null; }
+}
+function scheduleUpdateCheck() {
+  if (!updateChecked && state.doc?.settings.check_updates !== false) {
+    setTimeout(() => { if (state.doc && state.doc.settings.check_updates !== false) void checkUpdates(); }, 3000);
+  }
+}
+let syncJob, uiIdle = Promise.resolve();
 let remoteCheckPending = false, remoteCheckDeclined = false;
 let driveController, driveIdentity, cloudCopies = [], oldVaults = [], oauthPending = false;
 const syncSchedule = new SyncSchedule();
@@ -66,11 +89,16 @@ function stopWorker() { worker?.terminate(); worker = null; for (const call of c
 function toast(message, persistent = false) { const node = document.querySelector('#toast'); node.textContent = message; node.classList.toggle('success', message.startsWith('Синхронизация выполнена!')); node.hidden = false; clearTimeout(toastTimer); if (!persistent) toastTimer = setTimeout(() => { node.hidden = true; node.textContent = ''; }, 6500); }
 function error(message) { toast(message); const node = document.querySelector('#form-error'); if (node) { node.textContent = message; node.setAttribute('role', 'alert'); } else toast(message); }
 function setBusy(value) { state.busy = value; document.body.classList.toggle('busy', value); document.body.setAttribute('aria-busy', String(value)); }
+async function withUiLock(action) {
+  let release;
+  uiIdle = new Promise(resolve => { release = resolve; });
+  try { setBusy(true); return await action(); }
+  finally { setBusy(false); release(); if (state.lockRequested && state.token) { state.lockRequested = false; void safe(lock); } }
+}
 async function safe(action) {
   if (state.busy) return;
-  try { setBusy(true); await action(); }
-  catch (e) { if (e?.name !== 'AbortError') error(e instanceof Error ? e.message : 'Не удалось выполнить действие.'); }
-  finally { setBusy(false); if (state.lockRequested && state.token) { state.lockRequested = false; void safe(lock); } }
+  try { await withUiLock(action); }
+  catch (failure) { if (failure?.name !== 'AbortError') error(failure instanceof Error ? failure.message : 'Не удалось выполнить действие.'); }
 }
 function download(bytes, name, mime = 'application/octet-stream') {
   AndroidVault.exportFile(btoa(Array.from(bytes, v => String.fromCharCode(v)).join('')), name); return;
@@ -89,7 +117,7 @@ function savedStatus() { return state.record?.cloudPending ? 'Есть изме�
 const helpButton = `<button class="icon-button quiet" data-action="help" aria-label="Как это работает">${icon('help')}</button>`;
 function brand() { return '<div class="brand"><img src="./icon.svg" alt=""><div>Password Manager<small>ЛИЧНОЕ ПРОСТРАНСТВО</small></div></div>'; }
 function sidebar() {
-  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<div class="vault-item"><button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button><button class="danger vault-delete" data-action="delete-vault" data-id="${esc(v.id)}" aria-label="Удалить хранилище ${esc(v.name)}">${icon('trash')}</button></div>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">Android · 0.42.5</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
+  return `<aside class="sidebar">${brand()}<div class="sidebar-heading"><span class="kicker">Хранилища</span><button class="icon-button quiet small" data-action="new" aria-label="Добавить хранилище">${icon('plus')}</button></div><nav class="vault-list" aria-label="Ваши хранилища">${state.recent.map(v => `<div class="vault-item"><button class="vault-link ${state.record?.id === v.id ? 'active' : ''}" data-action="open-recent" data-id="${esc(v.id)}"><span class="vault-initial">${esc(initials(v.name))}</span><span><span class="vault-name">${esc(v.name)}</span><small>${v.fileHandle ? 'Файл на устройстве' : 'На этом устройстве'}</small></span></button><button class="danger vault-delete" data-action="delete-vault" data-id="${esc(v.id)}" aria-label="Удалить хранилище ${esc(v.name)}">${icon('trash')}</button></div>`).join('')}</nav>${!state.recent.length ? '<p class="sidebar-empty">Здесь появятся ваши хранилища.<br>Начнём с первого?</p>' : ''}<div class="side-bottom"><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon(document.documentElement.dataset.theme === 'dark' ? 'sun' : 'moon')}</button><span class="version">Android · ${APP_VERSION}</span>${helpButton}</div><p class="side-note">${icon('shield')}Шифрование на вашем устройстве.<br>Мастер-пароль остаётся у вас.</p></div></aside>`;
 }
 function shell(content, page = 'Хранилища') {
   app.innerHTML = `<div class="layout">${sidebar()}<main class="main"><header class="topbar"><div class="breadcrumb">${icon('vault')}<span>Ваше пространство</span><span>/</span><span>${esc(page)}</span></div><div class="top-status"><span class="status-dot"></span>Локальное шифрование</div></header>${content}<footer class="bottom-line"><span>Ваши пароли. Только ваш доступ.</span><span>Argon2id · AES-256-GCM</span></footer></main></div>`;
@@ -168,15 +196,25 @@ async function finishCreate() {
   rememberOpenedVault(inspect(state.record.blob).header.vault_id);
   toast('Хранилище создано и сохранено на телефоне');
 }
+function entryInView(entry, view, categories) {
+  if (view === 'trash') return !!entry.deleted_at;
+  if (entry.deleted_at) return false;
+  if (view === 'all') return entry.entry_type !== 'password';
+  if (view === 'none') return entry.category === null && entry.entry_type !== 'password';
+  if (view === 'other-passwords') return entry.entry_type === 'password';
+  return categories.has(entry.category);
+}
 function visibleEntries() {
-  return sortEntries(Object.values(state.doc.entries).filter(e => !!e.deleted_at === (state.category === 'trash') && (['all', 'trash'].includes(state.category) || (state.category === 'other-passwords' ? e.entry_type === 'password' : state.category === 'none' ? e.category === null && e.entry_type !== 'password' : descendants(state.doc, state.category).has(e.category))) && matchesEntry(e, state.query)), state.entrySort, state.doc);
+  const categories = descendants(state.doc, state.category);
+  return sortEntries(Object.values(state.doc.entries).filter(entry =>
+    entryInView(entry, state.category, categories) && matchesEntry(entry, state.query)), state.entrySort, state.doc);
 }
 function otherPasswordsLink() {
   return `<button class="nav-link ${state.category === 'other-passwords' ? 'active' : ''}" data-action="filter" data-id="other-passwords" title="Прочие пароли"><span class="asterisk" aria-hidden="true">*</span><span>Прочие пароли</span></button>`;
 }
 function workspaceSidebar() {
-  const doc = state.doc, active = Object.values(doc.entries).filter(e => !e.deleted_at).length, trash = Object.values(doc.entries).filter(e => e.deleted_at).length;
-  return `<aside class="sidebar" id="workspace-navigation" aria-label="Навигация хранилища"><button class="mobile-nav-close icon-button" data-action="mobile-nav-close" aria-label="Закрыть меню">${icon('close')}</button>${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'На телефоне'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все записи">${icon('key')}<span>Все записи</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><i class="category-dot" data-category-color="${esc(doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}"></i><span>${depth ? '• ' : ''}${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('dice')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">Android · 0.42.5</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
+  const doc = state.doc, active = Object.values(doc.entries).filter(e => entryInView(e, 'all')).length, trash = Object.values(doc.entries).filter(e => e.deleted_at).length;
+  return `<aside class="sidebar" id="workspace-navigation" aria-label="Навигация хранилища"><button class="mobile-nav-close icon-button" data-action="mobile-nav-close" aria-label="Закрыть меню">${icon('close')}</button>${brand()}<button class="vault-switch" data-action="switch-vault">${icon('vault')}<div><strong>${esc(state.record.name)}</strong><small>${state.record.drive ? 'Google Drive' : 'На телефоне'}</small></div>${icon('chevron')}</button><nav aria-label="Разделы хранилища"><button class="nav-link ${state.category === 'all' ? 'active' : ''}" data-action="filter" data-id="all" title="Все пароли">${icon('key')}<span>Все пароли</span><span class="count">${active}</span></button><button class="nav-link ${state.category === 'none' ? 'active' : ''}" data-action="filter" data-id="none" title="Без категории">${icon('folder')}<span>Без категории</span></button>${otherPasswordsLink()}<div class="section-caption"><span>Категории</span><button class="icon-button quiet small" data-action="add-category" aria-label="Создать категорию">${icon('plus')}</button></div>${visibleCategoryRows(doc, collapsedCategories).map(({id, name, depth, path, hasChildren, collapsed}) => `<div class="category-row" draggable="true" data-category-id="${esc(id)}" data-category-depth="${depth}"><button class="nav-link ${state.category === id ? 'active' : ''}" data-action="filter" data-id="${esc(id)}" title="${esc(path)}"><span class="category-symbol" data-category-color="${esc(doc.settings.category_colors?.[id] || state.doc.settings.accent_color || '#8864cb')}">${categoryDots(depth)}${icon(depth ? 'subfolder' : 'folder')}</span><span>${esc(name)}</span></button>${hasChildren ? `<button class="icon-button quiet small category-toggle" data-action="toggle-category" data-id="${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? 'Развернуть' : 'Свернуть'} подкатегории ${esc(name)}">${collapsed ? '▸' : '▾'}</button>` : ''}<button class="icon-button quiet small" data-action="manage-category" data-id="${esc(id)}" aria-label="Изменить категорию ${esc(name)}">${icon('settings')}</button></div>`).join('')}<button class="nav-link ${state.category === 'trash' ? 'active' : ''}" data-action="filter" data-id="trash" title="Корзина">${icon('trash')}<span>Корзина</span><span class="count">${trash}</span></button></nav><div class="side-bottom"><button class="nav-link" data-action="generator" title="Генератор">${icon('generator')}<span>Генератор паролей</span></button><button class="nav-link" data-action="settings" title="Настройки">${icon('settings')}<span>Настройки</span></button><div class="footer-actions"><button class="icon-button quiet" data-action="theme" aria-label="Переключить тему">${icon('sun')}</button><span class="version">Android · ${APP_VERSION}</span><button class="icon-button quiet" data-action="lock" data-allow-busy aria-label="Заблокировать хранилище">${icon('lock')}</button></div></div></aside>`;
 }
 function recordList() {
   const entries = visibleEntries();
@@ -229,23 +267,26 @@ document.addEventListener('keydown', event => {
 });
 matchMedia('(max-width: 760px)').addEventListener('change', () => setMobileNav(false));
 function phoneDashboard() {
-  const entries = Object.values(state.doc.entries), active = entries.filter(e => !e.deleted_at);
+  const entries = Object.values(state.doc.entries);
   const tiles = [
-    ['all', 'Все', 'key', active.length, 'blue'],
-    ['none', 'Без категории', 'folder', active.filter(e => !e.category && e.entry_type !== 'password').length, 'green'],
-    ['other-passwords', 'Прочие пароли', 'shield', active.filter(e => !e.category && e.entry_type === 'password').length, 'yellow'],
-    ['trash', 'Удалённые', 'trash', entries.filter(e => e.deleted_at).length, 'orange'],
-    ...categoryRows(state.doc).map(c => [c.id, c.name, 'folder', active.filter(e => e.category === c.id).length, 'purple'])
-  ];
-  return `<section class="phone-dashboard" aria-label="Категории паролей"><div class="phone-heading"><h1>Пароли</h1><button class="icon-button quiet" data-action="settings" aria-label="Настройки">${icon('settings')}</button></div><p class="phone-vault">${esc(state.record.name)}</p><div class="password-tiles">${tiles.map(([id,label,glyph,count,color]) => `<button class="password-tile ${color}" data-action="filter" data-id="${esc(id)}"><span class="tile-icon">${icon(glyph)}</span><span class="tile-count">${count}</span><strong>${esc(label)}</strong></button>`).join('')}</div><div class="phone-tools"><button class="quiet" data-action="generator">${icon('dice')} Генератор</button><button class="quiet" data-action="drive-settings">${icon('cloud')} Google Drive</button></div></section>`;
+    ['all', 'Все пароли', 'key', 'blue'],
+    ['none', 'Без категории', 'folder', 'green'],
+    ['other-passwords', 'Прочие пароли', 'shield', 'yellow'],
+    ['trash', 'Удалённые', 'trash', 'orange'],
+    ...categoryRows(state.doc).map(c => [c.id, c.name, c.depth ? 'subfolder' : 'folder', 'purple', c.depth])
+  ].map(([id, label, glyph, color, depth]) => {
+    const categories = descendants(state.doc, id);
+    return [id, label, glyph, entries.filter(e => entryInView(e, id, categories)).length, color, depth];
+  });
+  return `<section class="phone-dashboard" aria-label="Категории паролей"><div class="phone-heading"><h1>Пароли</h1><button class="icon-button quiet" data-action="settings" aria-label="Настройки">${icon('settings')}</button></div><p class="phone-vault">${esc(state.record.name)}</p><div class="password-tiles">${tiles.map(([id,label,glyph,count,color,depth]) => `<button class="password-tile ${color}" data-action="filter" data-id="${esc(id)}"><span class="tile-symbol">${categoryDots(depth)}<span class="tile-icon">${icon(glyph)}</span></span><span class="tile-count">${count}</span><strong>${esc(label)}</strong></button>`).join('')}</div><div class="phone-tools"><button class="quiet" data-action="generator">${icon('generator')} Генератор</button><button class="quiet" data-action="drive-settings">${icon('cloud')} Google Drive</button></div></section>`;
 }
 let phoneHome = true;
 function workspace() {
   applyAppearance();
+  if (state.view !== 'workspace') scheduleUpdateCheck();
   state.view = 'workspace'; document.title = state.record.name + ' — Password Manager';
   app.innerHTML = `<div class="workspace ${phoneHome ? 'phone-home' : 'phone-list'} ${state.selected || state.editingNew ? 'show-editor' : ''}">${workspaceSidebar()}<button class="mobile-nav-backdrop" data-action="mobile-nav-close" aria-label="Закрыть меню" tabindex="-1"></button><section class="entry-column">${phoneDashboard()}<div class="entry-toolbar"><div class="entry-toolbar-top"><button class="mobile-nav-toggle icon-button" data-action="mobile-nav" aria-label="Открыть меню" aria-controls="workspace-navigation" aria-expanded="false">☰</button><button class="phone-back quiet" data-action="phone-home" aria-label="Все категории">${icon('back')} Категории</button><h2>${state.category === 'trash' ? 'Корзина' : 'Записи'}</h2>${listActions()}<button class="icon-button quiet list-lock" data-action="lock" data-allow-busy aria-label="Заблокировать">${icon('lock')}</button></div><div class="search-wrap">${icon('search')}<input id="search" class="search" type="search" value="${esc(state.query)}" placeholder="Поиск по хранилищу" aria-label="Поиск по хранилищу"></div><label class="entry-sort-label" for="entry-sort">Сортировка<select id="entry-sort"><option value="title" ${state.entrySort === 'title' ? 'selected' : ''}>По алфавиту (А–Я)</option><option value="updated" ${state.entrySort === 'updated' ? 'selected' : ''}>По изменению (сначала новые)</option><option value="category" ${state.entrySort === 'category' ? 'selected' : ''}>По категориям</option></select></label></div><div class="records" id="records">${recordList()}</div><div class="list-foot" id="list-foot">${visibleEntries().length} записей · Зашифровано на устройстве</div></section><main class="record-editor" id="record-editor"></main></div>`;
-  document.querySelectorAll('[data-category-color]').forEach(node => { node.style.backgroundColor = node.dataset.categoryColor; });
-  document.querySelectorAll('[data-category-depth]').forEach(node => { node.style.paddingLeft = Math.min(Number(node.dataset.categoryDepth), 12) * 14 + 'px'; });
+  document.querySelectorAll('[data-category-color]').forEach(node => { node.style.color = node.dataset.categoryColor; });
   applyEntryColors();
   renderEditor();
   setMobileNav(false);
@@ -371,9 +412,9 @@ async function confirmLeave() {
 }
 function showModal(title, content) { modal.innerHTML = `<div class="modal-head"><h2>${title}</h2><button class="icon-button quiet" data-action="close-modal" aria-label="Закрыть">${icon('close')}</button></div>${content}`; modal.showModal(); }
 function closeModal() { modal.close(); modal.replaceChildren(); }
-function ask(title, message, buttons) {
+function ask(title, message, buttons, details = '') {
   return new Promise(resolve => {
-    showModal(title, `<p>${esc(message)}</p><div class="modal-actions">${buttons.map(b => `<button data-allow-busy data-choice="${b.value}" class="${b.primary ? 'primary' : 'secondary'}">${b.label}</button>`).join('')}</div>`);
+    showModal(title, `<p>${esc(message)}</p>${details}<div class="modal-actions">${buttons.map(b => `<button data-allow-busy data-choice="${b.value}" class="${b.primary ? 'primary' : 'secondary'}">${b.label}</button>`).join('')}</div>`);
     const finish = value => { modal.removeEventListener('click', onClick); modal.removeEventListener('cancel', onCancel); modal.removeEventListener('close', onClose); closeModal(); resolve(value); };
     const onClick = e => { const button = e.target.closest('[data-choice]'); if (button) finish(button.dataset.choice); else if (e.target.closest('[data-action="close-modal"]')) finish('cancel'); };
     const onCancel = e => { e.preventDefault(); finish('cancel'); };
@@ -465,7 +506,7 @@ function syncSettingsFields() {
 }
 function settings() {
   const status = !connected() || !state.record.drive ? ['не подключен', 'disconnected'] : state.record.cloudPending || state.doc.sync?.pending ? ['Требует синхронизации', 'pending'] : ['Подключен', 'connected'];
-  showModal('Настройки хранилища', `<form id="settings-form" class="form"><h3>Кастомизация</h3><div class="field"><label for="settings-accent">Основной цвет интерфейса</label><input id="settings-accent" name="accent_color" type="hidden" value="${esc(state.doc.settings.accent_color || '#8864cb')}"><button id="accent-color-button" type="button" class="secondary" data-action="choose-accent">${esc(state.doc.settings.accent_color || '#8864cb')}</button></div><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><hr class="settings-separator"><h3>Общие</h3><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Экспортировать файл</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><section class="danger-zone"><h3>Удаление</h3><button type="button" class="danger secondary settings-single" data-action="delete-cloud-versions">Удалить облачные версии</button><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить локальное сохранение</button><button type="button" class="danger secondary settings-single" data-action="uninstall-app">Удалить приложение</button></section><p class="storage-summary">Изменения автоматически сохраняются в зашифрованном виде на телефоне. Экспортируйте файл или подключите Google Drive для резервной копии.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
+  showModal('Настройки хранилища', `<form id="settings-form" class="form"><h3>Кастомизация</h3><div class="field"><label for="settings-accent">Основной цвет интерфейса</label><input id="settings-accent" name="accent_color" type="hidden" value="${esc(state.doc.settings.accent_color || '#8864cb')}"><button id="accent-color-button" type="button" class="secondary" data-action="choose-accent">${esc(state.doc.settings.accent_color || '#8864cb')}</button></div><div class="field"><label for="settings-theme">Тема</label><select id="settings-theme" name="theme">${[['system','Системная'],['light','Светлая'],['dark','Тёмная']].map(([key,label]) => `<option value="${key}" ${state.doc.settings.theme === key ? 'selected' : ''}>${label}</option>`).join('')}</select></div><hr class="settings-separator"><h3>Общие</h3><div class="field"><label for="lock-minutes">Автоблокировка, минут</label><input id="lock-minutes" type="number" name="lock_minutes" min="1" max="1440" value="${state.doc.settings.lock_minutes}"></div><hr class="settings-separator"><div class="field"><label for="settings-vault-name">Имя хранилища</label><input id="settings-vault-name" name="vault_name" maxlength="100" value="${esc(state.record.name)}" required></div><hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="drive-settings">Google Drive — Действия</button><p id="drive-connection-status" class="drive-status ${status[1]}">Google Drive — ${status[0]}</p><button type="button" class="secondary settings-single" data-action="drive-sync" ${connected() ? '' : 'disabled'}>Синхронизировать сейчас</button>${syncSettingsFields()}<hr class="settings-separator"><button type="button" class="secondary settings-single" data-action="export">Скачать зашифрованный экспорт</button><button type="button" class="secondary settings-single" data-action="save-file">Экспортировать файл</button><button type="button" class="secondary settings-single" data-action="backups">Резервные состояния</button><hr class="settings-separator"><button type="button" class="danger secondary settings-single" data-action="deletion-settings">Удаление/Отключение</button><hr class="settings-separator"><label><input type="checkbox" name="check_updates" ${state.doc.settings.check_updates !== false ? 'checked' : ''}> Проверять обновления при запуске</label><button type="button" class="secondary settings-single" data-action="check-updates">Проверить обновления</button><button type="button" class="secondary settings-single" data-action="show-releases">Версии приложения</button><p class="storage-summary">Изменения автоматически сохраняются в зашифрованном виде на телефоне. Экспортируйте файл или подключите Google Drive для резервной копии.</p><div class="modal-actions"><button class="primary" type="submit">Сохранить</button></div></form>`);
 }
 async function commitSyncStage(staged) {
   try {
@@ -474,45 +515,78 @@ async function commitSyncStage(staged) {
     state.record = saved; state.doc = staged.document;
   } catch (e) { await rpc('discard', { token: state.token }).catch(() => {}); throw e; }
 }
-async function syncDrive(prefetched = null, existingTransport = null) {
+function startSync() { startDriveJob(token => syncDrive(token)); }
+function startDriveJob(operation) {
+  if (syncJob) return;
+  const token = state.token;
+  const job = operation(token)
+    .catch(failure => {
+      if (state.token === token && !state.lockRequested && failure.name !== 'AbortError') error(failure.message);
+    }).finally(() => { if (syncJob === job) syncJob = null; });
+  syncJob = job;
+}
+function requireSyncVault(token) {
+  if (state.token !== token || state.lockRequested) throw new DOMException('Обмен остановлен', 'AbortError');
+}
+async function syncCommit(token, operation) {
+  while (state.busy) await uiIdle;
+  requireSyncVault(token);
+  await withUiLock(operation);
+}
+async function syncDrive(token, prefetched = null, existingTransport = null) {
   remoteCheckDeclined = false; remoteCheckPending = false;
   if (!state.doc) throw new Error('Сначала откройте хранилище.');
   toast('Синхронизация..', true);
   syncSchedule.reset(syncMinutes(state.doc.settings));
-  const transport = existingTransport || await driveTransport(), identity = driveIdentity || await transport.identity();
+  const transport = existingTransport || await driveTransport();
+  requireSyncVault(token);
+  const identity = driveIdentity || await transport.identity();
+  requireSyncVault(token);
   if (state.record.drive?.id && state.record.drive.id !== identity.id) throw new Error('Выбран другой Google-аккаунт. Подключите прежний аккаунт.');
-  // A complete remote listing precedes any publication; incompatible access stops it.
   const pendingLocal = !!state.record.cloudPending;
   const before = new TextDecoder().decode(canonical({ ...state.doc, revision: 0 }));
-  let remote = prefetched || await transport.fetch();
-  state.record = await putVault({ ...state.record, drive: { ...identity, folder: transport.folder }, cloudPending: true });
-  let finished = false, checkpointSaved = false;
   const vaultId = inspect(state.record.blob).header.vault_id;
+  let remote = prefetched || await transport.fetch();
+  let finished = false, checkpointSaved = false, lastBlob;
   for (let pass = 0; pass < 4; pass++) {
-    await commitSyncStage(await rpc('sync-prepare', { token: state.token, remote }));
-    const pending = state.doc.sync.pending;
+    let pending;
+    await syncCommit(token, async () => {
+      if (state.dirty) throw new Error('Сохраните запись, чтобы продолжить синхронизацию.');
+      state.record = await putVault({ ...state.record, drive: { ...identity, folder: transport.folder }, cloudPending: true });
+      await commitSyncStage(await rpc('sync-prepare', { token, remote }));
+      pending = state.doc.sync.pending;
+      lastBlob = state.record.blob;
+      if (!modal.open) {
+        if (state.selected && !state.doc.entries[state.selected]) state.selected = null;
+        if (state.query) { refreshSelectionList(); renderEditor(); }
+        else workspace();
+      }
+    });
     if (!pending) { finished = true; break; }
-    // Save the immutable queue first; drain both a retry and any later edits.
-    await transport.checkpoint(vaultId, state.record.blob);
+    requireSyncVault(token);
+    await transport.checkpoint(vaultId, lastBlob);
     checkpointSaved = true;
     const { unb64 } = await import('./core.js');
     const confirmed = await transport.publish(pending.id, unb64(pending.blob));
-    await commitSyncStage(await rpc('sync-ack', { token: state.token, id: pending.id, blob: confirmed }));
+    await syncCommit(token, async () => commitSyncStage(await rpc('sync-ack', { token, id: pending.id, blob: confirmed })));
     remote = await transport.fetch();
   }
   if (!finished) throw new Error('Появляются новые облачные изменения. Повторите обмен; очередь сохранена.');
+  requireSyncVault(token);
   const changed = before !== new TextDecoder().decode(canonical({ ...state.doc, revision: 0 }));
-  // The pre-publication checkpoint already contains all user data and an exact
-  // retryable queue. A second copy solely to clear its pending flag is redundant.
-  if (!checkpointSaved && (pendingLocal || changed)) await transport.checkpoint(vaultId, state.record.blob);
-  state.record = await putVault({ ...state.record, cloudPending: false, filePending: false });
-  const count = Object.keys(conflicts(state.doc.sync.state)).length;
-  toast(count ? `Синхронизация выполнена! Конфликтов: ${count}. Выберите варианты в Google Drive → Конфликты.` : 'Синхронизация выполнена!');
-  if (state.view === 'workspace') { const values = state.dirty ? editorValues() : null; workspace(); if (values) { renderEditor(values); state.dirty = true; } }
+  if (!checkpointSaved && (pendingLocal || changed)) await transport.checkpoint(vaultId, lastBlob);
+  await syncCommit(token, async () => {
+    if (state.record.blob === lastBlob) state.record = await putVault({ ...state.record, cloudPending: false, filePending: false });
+    const count = Object.keys(conflicts(state.doc.sync.state)).length;
+    toast(count ? `Синхронизация выполнена! Конфликтов: ${count}. Выберите варианты в Google Drive → Конфликты.` : 'Синхронизация выполнена!');
+    const label = document.querySelector('.save-state');
+    if (label && !state.dirty && state.selected && !state.doc.entries[state.selected]?.deleted_at) label.textContent = savedStatus();
+  });
 }
 function driveDialog() {
   showModal('Google Drive', `<p>Google получает только зашифрованные файлы. Мастер-пароль и ключ восстановления остаются здесь.</p>
     ${!connected() ? `<p>Войдите в Google и разрешите доступ к файлам приложения.</p><button id="google-connect" class="primary" data-action="drive-connect" disabled>Подготовка входа…</button>` : `<p>${esc(driveIdentity?.email || state.record?.drive?.email || 'Google подключён')}</p><div class="inline-actions">${state.doc ? '<button class="primary" data-action="drive-sync">Сохранить и синхронизировать</button><button class="secondary" data-action="drive-conflicts">Конфликты</button>' : ''}<button class="secondary" data-action="drive-list">Все копии Google Drive</button><button class="quiet" data-action="drive-disconnect">Отключить Google Drive</button></div>`}
+    <p id="drive-connect-progress" class="notice" role="status" hidden><span class="loading-dot" aria-hidden="true"></span>Подключение..</p>
     <p id="form-error" class="form-error"></p><p class="notice">${persistentSessionEnabled() ? 'Подключение Google запоминается на срок до 30 дней и восстанавливается после перезагрузки. Отключение Google завершает сохранённую сессию.' : 'Длительный вход на этом сайте пока недоступен. Подключение сохраняется при блокировке хранилища; после перезагрузки или истечения доступа Google может запросить повторный вход.'} При ошибке сети скачайте .pmvault перед закрытием.</p>`);
   const control = document.querySelector('#google-connect');
   if (control && persistentSessionEnabled()) {
@@ -529,19 +603,29 @@ function driveDialog() {
 }
 async function connectDrive(node) {
   oauthPending = true;
+  toast('Подключение..', true);
+  const progress = document.querySelector('#drive-connect-progress');
+  if (progress) progress.hidden = false;
   try {
     const result = await authorize(GOOGLE_WEB_CLIENT_ID, { redirect: node?.dataset?.redirect === 'true', preservePage: !!state.record });
     if (result === null) return;
     driveCache.clear();
     driveIdentity = await (await driveTransport()).identity();
-  if (state.doc) { closeModal(); await syncDrive(); driveDialog(); }
+    toast('Google Drive подключён');
+    if (state.doc) { closeModal(); startSync(); }
     else await listCloud();
-  } finally { oauthPending = false; }
+  } finally {
+    oauthPending = false;
+    if (progress) progress.hidden = true;
+    const notice = document.querySelector('#toast');
+    if (notice.textContent === 'Подключение..') notice.hidden = true;
+  }
 }
 async function listCloud() {
   const transport = await driveTransport(); cloudCopies = await transport.checkpoints();
   const { latest, others } = groupCopies(cloudCopies, lastOpenedVault());
-  const row = (copy, pinned = false) => `<div class="backup-row cloud-copy ${pinned ? 'last-opened-copy' : ''}" data-copy-id="${esc(copy.id)}"><div><strong>${esc(copy.vaultName || copy.name || 'Хранилище')}</strong><small>${esc(displayTime(copy))}</small><small>${esc(copy.name)}</small></div><button class="secondary small" data-action="drive-open" data-index="${cloudCopies.indexOf(copy)}">Открыть</button><button class="danger secondary small" data-action="drive-delete" data-index="${cloudCopies.indexOf(copy)}">Удалить хранилище</button></div>`;
+  const times = copyTimes(cloudCopies);
+  const row = (copy, pinned = false) => `<div class="backup-row cloud-copy ${pinned ? 'last-opened-copy' : ''}" data-copy-id="${esc(copy.id)}"><div><strong>${esc(copy.vaultName || copy.name || 'Хранилище')}</strong><small>${esc(times.get(copy.id))}</small><small>${esc(copy.name)}</small></div><button class="secondary small" data-action="drive-open" data-index="${cloudCopies.indexOf(copy)}">Открыть</button><button class="danger secondary small" data-action="drive-delete" data-index="${cloudCopies.indexOf(copy)}">Удалить хранилище</button></div>`;
   showModal('Копии в Google Drive', `<p>Новые копии показаны первыми. Время сохранения указано в UTC.</p>${latest ? `<section class="last-opened-section"><h3>Последнее открытое хранилище</h3>${row(latest, true)}</section>` : ''}${others.length ? `<h3>Все резервные копии</h3>${others.map(copy => row(copy)).join('')}` : ''}${!cloudCopies.length ? '<p>В Google Drive пока нет доступных копий хранилищ.</p>' : ''}<p id="form-error" class="form-error"></p>`);
 }
 function showConflicts() {
@@ -582,6 +666,13 @@ async function deleteCloudVault(copy) {
 }
 
 const actions = {
+  'deletion-settings': () => {
+    closeModal();
+    showModal('Удаление/Отключение', `<section class="danger-zone"><button type="button" class="danger secondary settings-single" data-action="delete-cloud-versions">Удалить облачные версии</button><button type="button" class="danger secondary settings-single" data-action="delete-vault" data-id="${esc(state.record.id)}">Удалить локальное сохранение</button><button type="button" class="danger secondary settings-single" data-action="uninstall-app">Удалить приложение</button></section><div class="modal-actions"><button type="button" class="secondary" data-action="deletion-back">Назад</button></div>`);
+  },
+  'deletion-back': () => { closeModal(); settings(); },
+  'check-updates': () => checkUpdates(true),
+  'show-releases': () => AndroidVault.openReleases(),
   'delete-cloud-versions': async () => {
     if (!connected()) throw new Error('Сначала подключите Google Drive.');
     if (await ask('Удалить облачные версии?', 'Все служебные версии этого хранилища будут удалены из Drive. Локальная копия сохранится. Другие устройства могут загрузить свои версии повторно.', [{value:'cancel',label:'Отмена'},{value:'delete',label:'Удалить',primary:true}]) !== 'delete') return;
@@ -600,7 +691,7 @@ const actions = {
   'drive-delete': async node => deleteCloudVault(cloudCopies[Number(node.dataset.index)]),
   'drive-connect': connectDrive,
   'drive-list': listCloud,
-  'drive-sync': async () => { if (!await confirmLeave()) return; closeModal(); await syncDrive(); },
+  'drive-sync': async () => { if (!await confirmLeave()) return; closeModal(); startSync(); },
   'drive-conflicts': async () => showConflicts(),
   'drive-resolve': async node => { await commitSyncStage(await rpc('sync-resolve', { token: state.token, key: node.dataset.key, dot: node.dataset.dot })); state.record = await putVault({ ...state.record, cloudPending: true }); showConflicts(); toast('Вариант выбран · ожидает синхронизации'); },
   'drive-disconnect': async () => {
@@ -792,6 +883,11 @@ document.addEventListener('dragend', () => { draggedCategory = null; });
 document.addEventListener('click', e => {
   document.querySelector('#record-context-menu')?.remove();
   const node = e.target.closest('[data-action]'); if (!node || node.disabled) return;
+  if (syncJob && ['drive-start', 'drive-connect', 'drive-open', 'drive-list', 'drive-delete', 'drive-sync', 'drive-disconnect', 'drive-resolve', 'delete-cloud-versions', 'delete-vault', 'uninstall-app'].includes(node.dataset.action)) {
+    e.preventDefault();
+    toast('Дождитесь завершения обмена с Google Drive.');
+    return;
+  }
   if (node.dataset.action === 'lock' && state.busy) { pauseDrive(); state.lockRequested = true; if (modal.open) closeModal(); return; }
   if (node.dataset.action === 'close-modal' && modal.querySelector('[data-choice]')) return;
   if (node.dataset.action === 'select-entry') { e.preventDefault(); safe(() => selectRecords(node, e.ctrlKey || e.metaKey, e.shiftKey)); return; }
@@ -834,6 +930,7 @@ document.addEventListener('submit', e => {
       next.settings.vault_name = vaultName(new FormData(form).get('vault_name'));
       next.settings.accent_color = new FormData(form).get('accent_color');
       next.settings.theme = new FormData(form).get('theme');
+      next.settings.check_updates = new FormData(form).has('check_updates');
       next.settings.sync_minutes = document.querySelector('#sync-auto').checked ? Number(document.querySelector('#sync-minutes').value) : 0;
       if (!Number.isInteger(next.settings.sync_minutes) || next.settings.sync_minutes < (document.querySelector('#sync-auto').checked ? 1 : 0) || next.settings.sync_minutes > 1440) throw new Error('Интервал синхронизации: от 1 до 1440 минут, либо только вручную.');
       await persist(next, true);
@@ -856,22 +953,36 @@ for (const name of ['pointerdown', 'keydown', 'wheel']) document.addEventListene
 }, { passive: true });
 window.addEventListener('beforeunload', e => { if (state.dirty || state.busy || state.record?.filePending || state.record?.cloudPending) { e.preventDefault(); e.returnValue = ''; } });
 setInterval(checkIdle, 1000);
-async function checkRemoteChanges() {
+async function checkRemoteChanges(token) {
   const transport = await driveTransport(), remote = await transport.fetch();
+  requireSyncVault(token);
   const seen = state.doc.sync?.seen || {};
   let changed = false;
   for (const item of remote) if (seen[item.id]?.digest !== await hash(item.blob)) { changed = true; break; }
   if (!changed) { remoteCheckDeclined = false; return; }
-  const choice = await ask('Облачная версия обновлена', 'На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены, конфликтующие варианты сохранятся для выбора.', [{value:'cancel',label:'Позже'}, {value:'cloud',label:'Использовать облачную версию',primary:true}]);
+  let choice;
+  await syncCommit(token, async () => {
+    if (state.dirty || modal.open) { remoteCheckPending = true; return; }
+    let details = '<p>Не удалось прочитать сводку этой облачной версии.</p>';
+    try {
+      const changes = await rpc('sync-preview', { token: state.token, remote });
+      details = [['added', 'Добавлены'], ['removed', 'Удалены'], ['changed', 'Изменены']].map(([key, name]) => {
+        const titles = changes[key].sort((a, b) => a.localeCompare(b, 'ru'));
+        return '<h3>' + name + ' (' + titles.length + ')</h3>' +
+          (titles.length ? '<ul>' + titles.map(title => '<li>' + esc(title) + '</li>').join('') + '</ul>' : '<p>Нет записей</p>');
+      }).join('');
+    } catch {}
+    choice = await ask('Облачная версия обновлена', 'На другом устройстве появились изменения. Использовать облачную версию? Локальные изменения будут объединены, конфликтующие варианты сохранятся для выбора.', [{value:'cancel',label:'Позже'}, {value:'cloud',label:'Использовать облачную версию',primary:true}], '<details class="sync-details"><summary>Дополнительно</summary>' + details + '</details>');
+  });
+  if (choice === undefined) return;
   if (choice !== 'cloud') { remoteCheckDeclined = true; return; }
-  remoteCheckDeclined = false;
-  await syncDrive(remote, transport);
+  await syncDrive(token, remote, transport);
 }
 function checkAutoSync() {
-  if (!state.doc || !state.record?.drive || !connected() || state.busy || state.dirty || modal.open || state.view !== 'workspace') return;
-  if (remoteCheckPending) { remoteCheckPending = false; void safe(checkRemoteChanges); return; }
+  if (syncJob || !state.doc || !state.record?.drive || !connected() || state.busy || state.dirty || modal.open || state.view !== 'workspace') return;
+  if (remoteCheckPending) { remoteCheckPending = false; startDriveJob(checkRemoteChanges); return; }
   if (remoteCheckDeclined) return;
-  if (syncSchedule.due(syncMinutes(state.doc.settings))) void safe(syncDrive);
+  if (syncSchedule.due(syncMinutes(state.doc.settings))) startSync();
 }
 setInterval(checkAutoSync, 1000);
 // Returning to the tab checks elapsed inactivity; hiding it never locks immediately.

@@ -40,6 +40,69 @@ test('OAuth session survives reload, refreshes, encrypts credentials and logout 
   assert.equal((await handleSession(request('token', cookie.split(';')[0]), env)).status, 401);
 });
 
+test('Android receives a Drive access token after browser consent and verifier redemption', async t => {
+  const { env, grants } = fixture();
+  const { DriveTransport } = await import('../../../android/assets/ui/drive.js');
+  const steps = [];
+  let finishConsent, nativeSession;
+  globalThis.window = globalThis;
+  t.after(() => {
+    delete globalThis.AndroidVault;
+    delete globalThis.pmAuthResult;
+    delete globalThis.window;
+  });
+  const send = (path, options) => handleSession(new Request(origin + path, options), env);
+  globalThis.AndroidVault = {
+    hasSession: () => !!nativeSession,
+    connect(state, challenge) {
+      finishConsent = async () => {
+        const start = await send('/api/android/connect?' + new URLSearchParams({ state, challenge }));
+        assert.equal(start.status, 303);
+        const consent = new URL(start.headers.get('Location'));
+        assert.equal(consent.origin, 'https://accounts.google.com');
+        assert.equal(consent.searchParams.get('redirect_uri'), origin + '/');
+        assert.equal(consent.searchParams.get('code_challenge_method'), 'S256');
+        const cookie = start.headers.get('Set-Cookie').split(';', 1)[0];
+        const query = new URLSearchParams({ code: 'FICTIONAL-CODE', state: consent.searchParams.get('state') });
+        const complete = await send('/?' + query, { headers: { Cookie: cookie } });
+        assert.equal(complete.status, 200);
+        assert.match(await complete.text(), /href="passwordmanager:\/\/google"/);
+      };
+    },
+    authRequest(id, path, body) {
+      const exchange = async () => {
+        const headers = { 'Content-Type': 'application/json' };
+        if (nativeSession) headers.Authorization = 'Bearer ' + nativeSession;
+        const response = await send('/api/android/' + path, { method: 'POST', headers, body });
+        assert.equal(response.status, 200);
+        const value = await response.json();
+        steps.push(value.pending ? 'pending' : path);
+        if (value.pending) await finishConsent();
+        // Simulate the Java bridge keeping the bearer session out of JavaScript.
+        if (value.session) {
+          nativeSession = value.session;
+          return { paired: true };
+        }
+        return value;
+      };
+      exchange().then(value => window.pmAuthResult(id, { value }),
+        error => window.pmAuthResult(id, { error: error.message }));
+    }
+  };
+  const client = await import('../../../android/assets/ui/google.js');
+  const token = await client.authorize();
+  assert.equal(token, 'FICTIONAL-ACCESS');
+  assert.equal(client.accessToken(), token);
+  assert.deepEqual(steps, ['pending', 'pair', 'token']);
+  assert.deepEqual(grants.map(grant => grant.grant_type), ['authorization_code', 'refresh_token']);
+  const drive = new DriveTransport(token, { fetcher: async (url, options) => {
+    assert.equal(url, 'https://www.googleapis.com/drive/v3/about?fields=user(permissionId,emailAddress)');
+    assert.equal(options.headers.Authorization, 'Bearer FICTIONAL-ACCESS');
+    return Response.json({ user: { permissionId: 'fixture-account', emailAddress: 'fixture@example.invalid' } });
+  } });
+  assert.deepEqual(await drive.identity(), { id: 'fixture-account', email: 'fixture@example.invalid' });
+});
+
 test('OAuth rejects cross-origin, missing CSRF header, malformed codes and unconfigured service', async () => {
   const { env, request, grants } = fixture();
   const foreign = request('exchange', '', { code: 'CODE' }); foreign.headers.set('Origin', 'https://evil.invalid');

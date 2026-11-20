@@ -88,7 +88,7 @@ async function payload(access, bytes, id) {
   if (text(Object.keys(value).sort()) !== text(['id', 'protocol', 'state']) || value.protocol !== 1 || value.id !== id) throw new Error('Некорректный протокол облачной версии.');
   validateState(value.state); return value;
 }
-export async function prepare(access, document, actor, remote) {
+async function mergeRemote(access, document, actor, remote) {
   if (!Array.isArray(remote) || remote.length > 1000 || remote.reduce((n, v) => n + v.blob.length, 0) > 64 * 1024 * 1024) throw new Error('Облачная история превышает безопасный предел.');
   let doc = clone(document);
   if (!doc.sync) doc.sync = { state: seed(doc, actor), pending: null, published: null, seen: {} };
@@ -111,6 +111,11 @@ export async function prepare(access, document, actor, remote) {
     meta.seen[item.id] = { digest: fingerprint, vector: clone(decoded.state.vector) };
   }
   meta.state = state; doc = project(doc, state);
+  return { doc, meta, parsed };
+}
+export async function prepare(access, document, actor, remote) {
+  const { doc, meta, parsed } = await mergeRemote(access, document, actor, remote);
+  const state = meta.state;
   const fingerprint = await digest(canonical([access.header, state]));
   if (!meta.pending && (meta.published !== fingerprint || !parsed.some(v => same(v.state, state)))) {
     const id = crypto.randomUUID(), bytes = await encodeVault(access, { protocol: 1, id, state });
@@ -118,6 +123,16 @@ export async function prepare(access, document, actor, remote) {
     meta.pending = { id, blob: b64(bytes), state_id: fingerprint };
   }
   doc.sync = meta; return validateDocument(doc);
+}
+export async function previewChanges(access, document, actor, remote) {
+  const { doc } = await mergeRemote(access, document, actor, remote);
+  const active = value => new Map(Object.entries(value.entries).filter(([, entry]) => !entry.deleted_at));
+  const before = active(document), after = active(doc);
+  return {
+    added: [...after].filter(([id]) => !before.has(id)).map(([, entry]) => entry.title),
+    removed: [...before].filter(([id]) => !after.has(id)).map(([, entry]) => entry.title),
+    changed: [...after].filter(([id, entry]) => before.has(id) && !same(before.get(id), entry)).map(([, entry]) => entry.title)
+  };
 }
 export async function acknowledge(access, document, id, blob) {
   const doc = clone(document), pending = doc.sync?.pending;

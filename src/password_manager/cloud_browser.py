@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QWidget, QFrame, QListWidget, QTextEdit, QCheckBox, QFileDialog)
 
-from .cloud_backups import group_copies, display_time
+from .cloud_backups import group_copies, display_time, copy_times
 from . import model
 from .storage import export_blob
 
@@ -17,6 +17,7 @@ class CloudCopiesDialog(QDialog):
         self.setWindowTitle("Копии в Google Drive")
         self.resize(820, 640)
         self.selected_copy = None
+        self.copy_times = copy_times(copies)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Новые копии показаны первыми. Время сохранения указано в UTC."))
         scroll = QScrollArea()
@@ -51,7 +52,7 @@ class CloudCopiesDialog(QDialog):
             row.setProperty("accentPanel", True)
         line = QHBoxLayout(row)
         labels = QVBoxLayout()
-        for value in [copy.get("vaultName") or copy.get("name") or "Хранилище", display_time(copy), copy.get("name", "")]:
+        for value in [copy.get("vaultName") or copy.get("name") or "Хранилище", self.copy_times[copy["id"]], copy.get("name", "")]:
             label = QLabel(value)
             label.setTextFormat(Qt.TextFormat.PlainText)
             label.setWordWrap(True)

@@ -97,7 +97,7 @@ export async function authorize(){
    consecutiveNetworkErrors = 0;
   } catch (error) {
    if (epoch !== generation) break;
-   if (error.code !== 'transport_retry' || ++consecutiveNetworkErrors >= 3 || Date.now() >= deadline) throw error;
+   if (!['transport_retry', 'transport_dns'].includes(error.code) || ++consecutiveNetworkErrors >= 3 || Date.now() >= deadline) throw error;
    await wait(1000 * consecutiveNetworkErrors);
    continue;
   }
@@ -112,3 +112,4 @@ export async function authorize(){
  throw new Error('Вход Google не завершён. Повторите подключение.');
 }
 export const authorizeRedirect=authorize;
+export const latestAndroidRelease = () => call('release');
