@@ -1493,7 +1493,7 @@ class Window(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Проверка правильности записей")
         layout = QVBoxLayout(dialog)
-        hint = QLabel("Пробелы найдены в перечисленных полях. Автоисправление изменит сохранённые значения, включая пароли. Можно выбрать запись и исправить её вручную.")
+        hint = QLabel("Пробелы найдены в перечисленных реквизитах. Можно исправить их автоматически или открыть запись для ручной правки.")
         hint.setWordWrap(True)
         layout.addWidget(hint)
         rows = QListWidget()

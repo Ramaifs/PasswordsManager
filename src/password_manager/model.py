@@ -109,16 +109,17 @@ def hide_suggestion(doc, field, value):
         hidden.append(value.lower())
 
 
-def space_fields(record):
+def space_fields(record, fields=CREDENTIAL_FIELDS):
     if record.get("allow_spaces"):
         return []
     extra = record.get("additional_fields", {})
-    return [key for key in CREDENTIAL_FIELDS
+    return [key for key in fields
             if any(char.isspace() for value in (record.get(key, ""), *extra.get(key, [])) for char in value)]
 
 
 def space_problems(doc):
-    return [(key, entry["title"], fields) for key, entry in doc["entries"].items() if (fields := space_fields(entry))]
+    return [(key, entry["title"], fields) for key, entry in doc["entries"].items()
+            if (fields := space_fields(entry, SUGGESTION_FIELDS))]
 
 
 def repair_spaces(doc):
@@ -126,8 +127,6 @@ def repair_spaces(doc):
         return "".join(char for char in value if not char.isspace())
     for key, _, fields in space_problems(doc):
         entry = doc["entries"][key]
-        if entry.get("entry_type") == "password" and not clean(entry["password"]):
-            continue
         for field in fields:
             if field in entry:
                 entry[field] = clean(entry[field])

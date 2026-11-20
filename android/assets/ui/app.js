@@ -40,7 +40,7 @@ const now = () => new Date().toISOString();
 const clone = value => structuredClone(value);
 const state = { view: 'home', recent: [], record: null, token: null, doc: null, create: null, selected: null, category: 'all', entrySort: savedEntryOrder(), query: '', dirty: false, busy: false, generation: 0 };
 let worker, calls = new Map(), toastTimer, clipTimer, copiedPassword, lastActivity = Date.now();
-const APP_VERSION = '0.43.1';
+const APP_VERSION = '0.43.2';
 let updateChecked = false, updateRequest;
 async function checkUpdates(manual = false) {
   if (updateRequest || (!manual && updateChecked)) return;
@@ -705,7 +705,7 @@ async function deleteCloudVault(copy) {
 const actions = {
   'check-entries': () => checkEntrySpaces(true),
   'repair-spaces': async () => {
-    const approval = await ask('Исправить пробелы?', 'Пробелы будут удалены из перечисленных полей, включая пароли.', [{value:'cancel',label:'Отмена'},{value:'repair',label:'Исправить',primary:true}]);
+    const approval = await ask('Исправить пробелы?', 'Пробелы будут удалены из перечисленных реквизитов.', [{value:'cancel',label:'Отмена'},{value:'repair',label:'Исправить',primary:true}]);
     if (approval !== 'repair') { await checkEntrySpaces(false); return; }
     const next = clone(state.doc);
     repairSpaces(next);

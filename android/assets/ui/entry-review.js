@@ -1,4 +1,5 @@
 import { additionalFields } from './additional-fields.js';
+import { SUGGESTION_FIELDS } from './suggestions.js';
 
 export const SPACE_MESSAGE = 'Знак пробела запрещено писать в записях (доступно только через продвинутые настройки)';
 export const CREDENTIAL_FIELDS = ['email', 'phone', 'username', 'site', 'password', 'second_password', 'old_passwords'];
@@ -9,16 +10,15 @@ export const FIELD_NAMES = {
 };
 export const hasSpace = value => /[\s\u0085]/u.test(value);
 const clean = value => value.replace(/[\s\u0085]/gu, '');
-export function spaceFields(entry) {
+export function spaceFields(entry, fields = CREDENTIAL_FIELDS) {
   if (entry.allow_spaces) return [];
-  return CREDENTIAL_FIELDS.filter(field => [entry[field] || '', ...(entry.additional_fields?.[field] || [])].some(hasSpace));
+  return fields.filter(field => [entry[field] || '', ...(entry.additional_fields?.[field] || [])].some(hasSpace));
 }
 export function spaceProblems(doc) {
-  return Object.values(doc.entries).map(entry => ({entry, fields: spaceFields(entry)})).filter(item => item.fields.length);
+  return Object.values(doc.entries).map(entry => ({entry, fields: spaceFields(entry, SUGGESTION_FIELDS)})).filter(item => item.fields.length);
 }
 export function repairSpaces(doc) {
   for (const {entry, fields} of spaceProblems(doc)) {
-    if (entry.entry_type === 'password' && !clean(entry.password)) continue;
     for (const field of fields) {
       if (Object.hasOwn(entry, field)) entry[field] = clean(entry[field]);
       if (entry.additional_fields?.[field]) entry.additional_fields[field] = entry.additional_fields[field].map(clean);
